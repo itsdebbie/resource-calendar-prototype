@@ -97,13 +97,6 @@
   background: var(--a2-background-color-danger-faint, #fffbfa);
 }
 
-.rc-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: none;
-}
-
 .rc-chevron {
   border: 0;
   background: transparent;
@@ -141,6 +134,9 @@
   padding: 0 8px;
   min-width: 28px;
   box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--a2-foreground-color-default, #040404);
   font-size: 13px;
   line-height: 1;
@@ -156,13 +152,13 @@
 .rc-bar.is-unassigned {
   background: repeating-linear-gradient(
     -45deg,
-    var(--a2-color-neutral-70, #e8e8e8),
-    var(--a2-color-neutral-70, #e8e8e8) 6px,
-    var(--a2-color-neutral-50, #eee) 6px,
-    var(--a2-color-neutral-50, #eee) 12px
+    color-mix(in srgb, var(--rc-bar-color, #e8e8e8) 48%, #fff),
+    color-mix(in srgb, var(--rc-bar-color, #e8e8e8) 48%, #fff) 6px,
+    color-mix(in srgb, var(--rc-bar-color, #e8e8e8) 22%, #fff) 6px,
+    color-mix(in srgb, var(--rc-bar-color, #e8e8e8) 22%, #fff) 12px
   );
-  color: var(--a2-foreground-color-subdued, #707070);
-  border: 1px dashed var(--a2-border-color-default, #8b8b8b);
+  color: var(--a2-foreground-color-default, #040404);
+  border: 1px dashed color-mix(in srgb, var(--rc-bar-color, #8b8b8b) 65%, #8b8b8b);
 }
 
 .rc-bar.is-disabled {
@@ -190,6 +186,32 @@
   margin: 0 auto 8px;
   max-width: 720px;
   z-index: 6;
+}
+
+.rc-hours {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rc-meter {
+  width: 56px;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--a2-background-color-strong, #e8e8e8);
+  overflow: hidden;
+  flex: none;
+}
+
+.rc-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--a2-status-color-success, #077e50);
+}
+
+.rc-meter.is-over > span {
+  background: var(--a2-status-color-danger, #d62100);
 }
 
 .rc-nested .rc-gutter {

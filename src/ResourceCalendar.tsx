@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import {
-  Alert,
   Avatar,
   Button,
   Card,
@@ -17,8 +16,11 @@ import {
 } from '@servicetitan/anvil2'
 import {
   assignments,
+  hoursCaption,
+  hoursOver,
   people,
   personById,
+  phaseById,
   phases,
   projectById,
   projects,
@@ -43,8 +45,42 @@ function selectionKey(s: Selection) {
 
 function personMeta(personId: string) {
   const hours = weeklyHours(personId)
-  if (personId === 'david') return { text: '40h/w · 60h across projects', danger: true }
-  return { text: hours.detail, danger: hours.over }
+  return { text: `${hours.booked} / ${hours.cap}h`, detail: hours.detail, danger: hours.over }
+}
+
+function HoursReadout({
+  scheduled,
+  budget,
+  actual,
+  fallback,
+}: {
+  scheduled?: number
+  budget?: number
+  actual?: number
+  fallback?: string
+}) {
+  if (scheduled == null || budget == null) {
+    return fallback ? (
+      <Text size="small" subdued>
+        {fallback}
+      </Text>
+    ) : null
+  }
+  const over = hoursOver(scheduled, budget, actual)
+  const pct = budget > 0 ? Math.min(100, (scheduled / budget) * 100) : 0
+  return (
+    <div className="rc-hours">
+      <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
+        <span style={{ width: `${pct}%` }} />
+      </div>
+      <Text size="small" className={over ? 'a2-c-danger' : undefined} subdued={!over}>
+        {hoursCaption(scheduled, budget)}
+      </Text>
+      <Text size="small" subdued>
+        {actual ?? 0}h actual
+      </Text>
+    </div>
+  )
 }
 
 export function ResourceCalendar() {
@@ -151,12 +187,6 @@ export function ResourceCalendar() {
 
   return (
     <Flex direction="column" gap="3">
-      {zoom === 'quarters' || zoom === 'year' ? (
-        <Alert status="info" title={zoom === 'year' ? 'Year is a rough Conrad zoom' : 'Quarter is a rough zoom'}>
-          Larger chunks only — no day picking. Bulk select stays off past monthly, like Jade asked.
-        </Alert>
-      ) : null}
-
       <Card padding="0" className="rc-card">
         <Flex direction="column">
         <Flex direction="column" gap="2" className="rc-toolbar">
@@ -385,32 +415,49 @@ function ProjectBlock({
 }) {
   const projectPhases = phases.filter((p) => p.projectId === project.id)
   const techs = [...new Set(rows.filter((r) => r.personId !== 'unassigned').map((r) => r.personId))]
+  const sparkline = packLanes(projectPhases)
+  const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
 
   return (
     <>
-      <div className="rc-row is-group">
+      <div className={`rc-row is-group${projectOver ? ' is-over' : ''}${sparkline.laneCount > 1 ? ' is-stacked' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
-          <span className="rc-dot" style={{ background: project.color }} />
           <Flex direction="column">
             <Text>{project.name.replace(' Tentative', '')}</Text>
-            <Text size="small" subdued>
-              {open ? project.hours : project.collapsedHours}
-            </Text>
+            <HoursReadout
+              scheduled={project.scheduledHours}
+              budget={project.budgetHours}
+              actual={project.actualHours}
+              fallback={open ? project.hours : project.collapsedHours}
+            />
           </Flex>
           {project.tentative ? <Chip size="small" label="Tentative" color="#ffbe00" /> : null}
         </div>
-        <Timeline columns={columns} overlays={overlays} thin={open}>
-          {project.leftover ? null : (
+        <Timeline columns={columns} overlays={overlays} packed={projectPhases.length > 0 ? sparkline : undefined} thin>
+          {project.leftover ? null : projectPhases.length > 0 ? (
+            projectPhases.map((phase) => (
+              <Bar
+                key={phase.id}
+                start={phase.start}
+                end={phase.end}
+                columns={columns}
+                color={phase.color}
+                thin
+                canBulk={canBulk}
+                lane={sparkline.laneById.get(phase.id) ?? 0}
+                onClick={() => onBarClick(project.id, phase)}
+              />
+            ))
+          ) : (
             <Bar
               start={project.start}
               end={project.end}
               columns={columns}
               color={project.color}
-              label={open ? undefined : project.name.split(' ')[0]}
-              thin={open}
+              thin
               canBulk={canBulk}
               onClick={() => onBarClick(project.id, project)}
             />
@@ -426,11 +473,15 @@ function ProjectBlock({
           onBarClick={onBarClick}
         />
       ) : null}
-      {open && !project.leftover
-        ? rows
-            .filter((r) => r.kind === 'unassigned')
-            .map((row) => <AssignmentRow key={row.id} row={row} columns={columns} canBulk={canBulk} onBarClick={onBarClick} />)
-        : null}
+      {open && !project.leftover ? (
+        <UnassignedRow
+          projectId={project.id}
+          rows={rows.filter((r) => r.kind === 'unassigned')}
+          columns={columns}
+          canBulk={canBulk}
+          onBarClick={onBarClick}
+        />
+      ) : null}
       {open && !project.leftover
         ? techs.map((personId) => (
             <PersonAssignmentRow
@@ -500,9 +551,20 @@ function PersonBlock({
           {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
           <Flex direction="column">
             <Text>{person?.name ?? 'Unassigned'}</Text>
-            <Text size="small" className={meta.danger ? 'a2-c-danger' : undefined} subdued={!meta.danger}>
-              {meta.text}
-            </Text>
+            {meta.danger && 'detail' in meta && meta.detail ? (
+              <Tooltip openOnHover>
+                <Tooltip.Trigger>
+                  <Text size="small" className="a2-c-danger">
+                    {meta.text}
+                  </Text>
+                </Tooltip.Trigger>
+                <Tooltip.Content>{meta.detail}</Tooltip.Content>
+              </Tooltip>
+            ) : (
+              <Text size="small" className={meta.danger ? 'a2-c-danger' : undefined} subdued={!meta.danger}>
+                {meta.text}
+              </Text>
+            )}
           </Flex>
         </div>
         <Timeline columns={columns} packed={packed} thin={open}>
@@ -528,7 +590,6 @@ function PersonBlock({
         ? grouped.map(({ project, rows: projectRows }) => (
             <div className="rc-row rc-nested" key={project.id}>
               <div className="rc-gutter">
-                <span className="rc-dot" style={{ background: project.color }} />
                 <Flex direction="column">
                   <Text>{project.name.replace(' Tentative', '')}</Text>
                   <Text size="small" subdued>
@@ -577,62 +638,89 @@ function PhaseRow({
   return (
     <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
       <div className="rc-gutter">
-        <Text size="small" subdued>
-          Phases
-        </Text>
+        <Flex direction="column">
+          <Text size="small" subdued>
+            Phases
+          </Text>
+          <Text size="small" subdued>
+            Scheduled / budget
+          </Text>
+        </Flex>
       </div>
       <Timeline columns={columns} packed={packed}>
-        {projectPhases.map((phase) => (
-          <Bar
-            key={phase.id}
-            start={phase.start}
-            end={phase.end}
-            columns={columns}
-            color={phase.color}
-            label={phase.name}
-            canBulk={canBulk}
-            lane={packed.laneById.get(phase.id) ?? 0}
-            onClick={() => onBarClick(projectId, phase)}
-          />
-        ))}
+        {projectPhases.map((phase) => {
+          const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
+          const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
+          return (
+            <Bar
+              key={phase.id}
+              start={phase.start}
+              end={phase.end}
+              columns={columns}
+              color={phase.color}
+              label={cap ? `${phase.name} · ${cap}` : phase.name}
+              canBulk={canBulk}
+              lane={packed.laneById.get(phase.id) ?? 0}
+              onClick={() => onBarClick(projectId, phase)}
+              hint={`${phase.name} · ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual${over ? ' · over budget' : ''}`}
+            />
+          )
+        })}
       </Timeline>
     </div>
   )
 }
 
-function AssignmentRow({
-  row,
+function assignmentColor(row: Assignment, fallback: string) {
+  return phaseById(row.phaseId)?.color ?? fallback
+}
+
+function assignmentLabel(row: Assignment) {
+  const phase = phaseById(row.phaseId)
+  return phase ? `${phase.name} · ${row.label}` : row.label
+}
+
+function UnassignedRow({
+  projectId,
+  rows,
   columns,
   canBulk,
   onBarClick,
 }: {
-  row: Assignment
+  projectId: string
+  rows: Assignment[]
   columns: ReturnType<typeof getColumns>
   canBulk: boolean
   onBarClick: (projectId: string, item: { start: string; end: string }) => void
 }) {
+  const packed = packLanes(rows)
+  if (rows.length === 0) return null
   return (
-    <div className="rc-row rc-nested">
+    <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
       <div className="rc-gutter">
         <Avatar name="Unassigned" size="small" />
         <Flex direction="column">
           <Text>Unassigned</Text>
           <Text size="small" subdued>
-            No technician · 40h
+            No technician · {rows.map((r) => r.label).join(' + ')}
           </Text>
         </Flex>
       </div>
-      <Timeline columns={columns}>
-        <Bar
-          start={row.start}
-          end={row.end}
-          columns={columns}
-          color="#e8e8e8"
-          label={row.label}
-          unassigned
-          canBulk={canBulk}
-          onClick={() => onBarClick(row.projectId, row)}
-        />
+      <Timeline columns={columns} packed={packed}>
+        {rows.map((row) => (
+          <Bar
+            key={row.id}
+            start={row.start}
+            end={row.end}
+            columns={columns}
+            color={assignmentColor(row, '#e8e8e8')}
+            label={assignmentLabel(row)}
+            unassigned
+            canBulk={canBulk}
+            lane={packed.laneById.get(row.id) ?? 0}
+            onClick={() => onBarClick(projectId, row)}
+          />
+        ))}
       </Timeline>
     </div>
   )
@@ -670,7 +758,7 @@ function PersonAssignmentRow({
                   {meta.text}
                 </Text>
               </Tooltip.Trigger>
-              <Tooltip.Content>{meta.text}</Tooltip.Content>
+              <Tooltip.Content>{meta.detail}</Tooltip.Content>
             </Tooltip>
           ) : (
             <Text size="small" subdued>
@@ -686,8 +774,8 @@ function PersonAssignmentRow({
             start={row.start}
             end={row.end}
             columns={columns}
-            color={projectById(projectId)?.color ?? person.color}
-            label={row.label}
+            color={assignmentColor(row, projectById(projectId)?.color ?? person.color)}
+            label={assignmentLabel(row)}
             confirmed={row.confirmed}
             canBulk={canBulk}
             lane={packed.laneById.get(row.id) ?? 0}
@@ -740,6 +828,7 @@ function Bar({
   unassigned,
   canBulk,
   lane = 0,
+  hint,
   onClick,
 }: {
   start: string
@@ -752,11 +841,13 @@ function Bar({
   unassigned?: boolean
   canBulk: boolean
   lane?: number
+  hint?: string
   onClick: () => void
 }) {
   const style = barStyle(start, end, columns)
   if (!style.visible) return null
-  const title = `${label ?? ''} ${new Date(utc(start)).toUTCString().slice(5, 11)} – ${new Date(utc(end)).toUTCString().slice(5, 11)}`
+  const title =
+    hint ?? `${label ?? ''} ${new Date(utc(start)).toUTCString().slice(5, 11)} – ${new Date(utc(end)).toUTCString().slice(5, 11)}`.trim()
   return (
     <button
       type="button"
@@ -768,6 +859,7 @@ function Bar({
           background: unassigned ? undefined : color,
           color: unassigned ? undefined : contrastText(color),
           '--rc-lane': lane,
+          '--rc-bar-color': color,
         } as CSSProperties
       }
       title={title}
