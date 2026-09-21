@@ -1,0 +1,16 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: var(--a2-font-family-base, 'Nunito Sans', sans-serif);
+}
+
+.app-shell {
+  min-height: 100%;
+  background: var(--a2-background-color-strong, #f9f9f9);
+}
+
+.rc-page-content {
+  padding: 0 16px 24px;
+}
