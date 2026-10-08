@@ -575,7 +575,6 @@ function ProjectBlock({
                   key={phase.id}
                   start={phase.start}
                   end={phase.end}
-                  zoom={zoom}
                   columns={columns}
                   color={phase.color}
                   label={open ? (cap ? `${phase.name} · ${cap}` : phase.name) : undefined}
@@ -592,7 +591,6 @@ function ProjectBlock({
             <Bar
               start={project.start}
               end={project.end}
-              zoom={zoom}
               columns={columns}
               color={project.color}
               label={open ? durationBarLabel(project) : undefined}
@@ -606,7 +604,6 @@ function ProjectBlock({
       </div>
       {open && !project.leftover ? (
         <UnassignedRow
-          projectId={project.id}
           zoom={zoom}
           viewWindow={viewWindow}
           rows={rows.filter((r) => r.kind === 'unassigned')}
@@ -716,7 +713,6 @@ function PersonBlock({
               key={row.id}
               start={row.start}
               end={row.end}
-              zoom={zoom}
               columns={columns}
               color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
               label={open ? undefined : zoomBarLabel(zoom, row)}
@@ -750,7 +746,6 @@ function PersonBlock({
                     key={row.id}
                     start={row.start}
                     end={row.end}
-                    zoom={zoom}
                     columns={columns}
                     color={assignmentColor(row, project.color)}
                     label={zoomBarLabel(zoom, row)}
@@ -776,7 +771,6 @@ function assignmentColor(row: Assignment, fallback: string) {
 }
 
 function UnassignedRow({
-  projectId,
   zoom,
   viewWindow,
   rows,
@@ -785,7 +779,6 @@ function UnassignedRow({
   selectedKeys,
   onBarClick,
 }: {
-  projectId: string
   zoom: Zoom
   viewWindow: TimeWindow
   rows: Assignment[]
@@ -813,7 +806,6 @@ function UnassignedRow({
             key={row.id}
             start={row.start}
             end={row.end}
-            zoom={zoom}
             columns={columns}
             color={assignmentColor(row, '#e8e8e8')}
             label={zoomBarLabel(zoom, row)}
@@ -882,7 +874,6 @@ function PersonAssignmentRow({
             key={row.id}
             start={row.start}
             end={row.end}
-            zoom={zoom}
             columns={columns}
             color={assignmentColor(row, projectById(projectId)?.color ?? person.color)}
             label={zoomBarLabel(zoom, row)}
@@ -927,7 +918,6 @@ function Bar({
   start,
   end,
   columns,
-  zoom,
   color,
   label,
   thin,
@@ -942,7 +932,6 @@ function Bar({
   start: string
   end: string
   columns: ReturnType<typeof getColumns>
-  zoom: Zoom
   color: string
   label?: string
   thin?: boolean
