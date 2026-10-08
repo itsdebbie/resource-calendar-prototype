@@ -160,9 +160,14 @@ export function ResourceCalendar() {
     timeline
 
   const visColumns = useMemo(() => {
-    const pad = 4
-    return columns.filter((col) => col.end > viewWindow.start - pad * 86400000 && col.start < viewWindow.end + pad * 86400000)
-  }, [columns, viewWindow])
+    const minIndex = columns[0]?.index ?? timeline.firstVisible
+    const maxIndex = columns[columns.length - 1]?.index ?? timeline.firstVisible
+    const origin = Math.min(maxIndex, Math.max(minIndex, timeline.firstVisible))
+    const start = origin - 4
+    const end = origin + timeline.visibleCount + 6
+    const slice = columns.filter((col) => col.index >= start && col.index <= end)
+    return slice.length > 0 ? slice : columns.slice(0, Math.min(columns.length, 24))
+  }, [columns, timeline.firstVisible, timeline.visibleCount])
 
   const q = query.trim().toLowerCase()
   const visibleAssignments = assignments.filter((a) => !hidden.has(a.id))
@@ -521,6 +526,7 @@ export function ResourceCalendar() {
               setSelected([])
             }}
           >
+            <div className="rc-canvas" style={{ width: timeline.canvasWidth }}>
             <GanttContext.Provider value={gantt}>
               <div className="rc-grid-head">
                 <div className="rc-gutter-head">
@@ -554,6 +560,7 @@ export function ResourceCalendar() {
                     />
                   ))}
             </GanttContext.Provider>
+            </div>
           </div>
         </Flex>
       </Card>

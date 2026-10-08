@@ -38,6 +38,10 @@
   max-width: 100%;
 }
 
+.rc-canvas {
+  min-width: 100%;
+}
+
 .rc-grid-head,
 .rc-row {
   display: grid;

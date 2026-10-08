@@ -16,9 +16,13 @@ import {
   type TimeWindow,
 } from './timeline'
 
-function extentAround(zoom: Zoom, iso: string, extra = 18) {
+function extentAround(zoom: Zoom, iso: string, extra = 20) {
   const idx = columnIndexAt(zoom, utc(iso))
   return { min: idx - BUFFER_COLS, max: idx + BUFFER_COLS + extra }
+}
+
+function visiblePx(el: HTMLElement) {
+  return Math.min(2200, Math.max(320, Math.min(el.clientWidth, window.innerWidth) - GUTTER))
 }
 
 export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElement | null>) {
@@ -26,10 +30,12 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   const colW = columnWidth(zoom, viewportPx)
   const anchorRef = useRef({ iso: DEMO_TODAY, offsetPx: 0 })
   const [extent, setExtent] = useState(() => extentAround(zoom, DEMO_TODAY))
-  const [viewWindow, setViewWindow] = useState<TimeWindow>(() => {
-    const idx = columnIndexAt(zoom, utc(DEMO_TODAY))
-    return { start: columnAtIndex(zoom, idx).start, end: columnAtIndex(zoom, idx + 13).end }
-  })
+  const todayIndex = columnIndexAt(zoom, utc(DEMO_TODAY))
+  const [viewWindow, setViewWindow] = useState<TimeWindow>(() => ({
+    start: columnAtIndex(zoom, todayIndex).start,
+    end: columnAtIndex(zoom, todayIndex + 13).end,
+  }))
+  const [firstVisible, setFirstVisible] = useState(todayIndex)
   const [alignNonce, setAlignNonce] = useState(0)
 
   const extentRef = useRef(extent)
@@ -41,11 +47,27 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
 
   const prevMin = useRef(extent.min)
   const prevZoom = useRef(zoom)
-  const prevColW = useRef(colW)
   const pendingAlign = useRef(true)
   const readyRef = useRef(false)
+  const alignedAt = useRef(0)
 
   const columns = useMemo(() => columnsInExtent(zoom, extent.min, extent.max), [zoom, extent.min, extent.max])
+  const canvasWidth = GUTTER + columns.length * colW
+  const visibleCount = Math.max(8, Math.ceil(viewportPx / colW))
+
+  const publishWindow = useCallback((el: HTMLElement) => {
+    const { min, max } = extentRef.current
+    const width = colWRef.current
+    const z = zoomRef.current
+    const sl = el.scrollLeft
+    const count = Math.max(8, Math.ceil(visiblePx(el) / width))
+    const i0 = Math.min(max, Math.max(min, min + Math.floor(sl / width)))
+    const i1 = Math.min(max, Math.max(i0, i0 + count - 1))
+    const start = columnAtIndex(z, i0).start
+    const end = columnAtIndex(z, i1).end
+    setFirstVisible((prev) => (prev === i0 ? prev : i0))
+    setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+  }, [])
 
   const dateAtClientX = useCallback(
     (clientX: number) => {
@@ -86,7 +108,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       readyRef.current = false
       setExtent((e) => {
         const idx = columnIndexAt(zoom, utc(iso))
-        if (idx >= e.min + 10 && idx <= e.max - 10) return e
+        if (idx >= e.min + 8 && idx <= e.max - 8) return e
         return extentAround(zoom, iso)
       })
       setAlignNonce((n) => n + 1)
@@ -106,11 +128,13 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       const el = scrollRef.current
       if (!el) return
       el.scrollLeft += dx
+      alignedAt.current = el.scrollLeft
       const leftIdx = extentRef.current.min + Math.floor(el.scrollLeft / colWRef.current)
       expandToIndex(leftIdx)
-      expandToIndex(leftIdx + Math.ceil((el.clientWidth - GUTTER) / colWRef.current))
+      expandToIndex(leftIdx + Math.ceil(visiblePx(el) / colWRef.current))
+      publishWindow(el)
     },
-    [scrollRef, expandToIndex],
+    [scrollRef, expandToIndex, publishWindow],
   )
 
   const autoScrollFromPointer = useCallback(
@@ -133,8 +157,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const el = scrollRef.current
     if (!el) return
     const measure = () => {
-      const visible = Math.min(el.clientWidth, el.getBoundingClientRect().width, window.innerWidth)
-      const next = Math.min(2200, Math.max(400, visible - GUTTER))
+      const next = visiblePx(el)
       setViewportPx((prev) => (Math.abs(prev - next) < 2 ? prev : next))
     }
     measure()
@@ -146,6 +169,8 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    let frames = 0
+    let raf = 0
 
     if (prevZoom.current !== zoom) {
       prevZoom.current = zoom
@@ -153,83 +178,73 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       readyRef.current = false
       const next = extentAround(zoom, anchorRef.current.iso)
       prevMin.current = next.min
-      prevColW.current = colW
       if (next.min !== extent.min || next.max !== extent.max) {
         setExtent(next)
         return
       }
-    } else if (prevColW.current !== colW && readyRef.current) {
-      const iso = dateAtWorldX(zoom, extent.min, prevColW.current, el.scrollLeft)
-      anchorRef.current = { iso, offsetPx: 0 }
-      pendingAlign.current = true
-      prevColW.current = colW
-    } else {
-      prevColW.current = colW
     }
 
-    if (pendingAlign.current) {
+    const apply = () => {
       const { iso, offsetPx } = anchorRef.current
-      el.scrollLeft = Math.max(0, worldXForDate(zoom, extent.min, colW, iso) - offsetPx)
+      const target = Math.max(0, worldXForDate(zoom, extent.min, colW, iso) - offsetPx)
+      el.scrollLeft = target
+      const stuck = target > colW && el.scrollLeft < colW && el.scrollWidth <= el.clientWidth + 4
+      if (stuck && frames < 8) {
+        frames += 1
+        raf = requestAnimationFrame(apply)
+        return
+      }
+      alignedAt.current = el.scrollLeft
       prevMin.current = extent.min
       pendingAlign.current = false
       readyRef.current = true
-      const sl = el.scrollLeft
-      const visible = Math.max(colW, el.clientWidth - GUTTER)
-      const i0 = extent.min + Math.max(0, Math.floor(sl / colW))
-      const i1 = extent.min + Math.max(i0, Math.ceil((sl + visible) / colW) - 1)
-      const start = columnAtIndex(zoom, i0).start
-      const end = columnAtIndex(zoom, i1).end
-      setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
-      return
+      publishWindow(el)
+    }
+
+    if (pendingAlign.current) {
+      apply()
+      return () => cancelAnimationFrame(raf)
     }
 
     const deltaCols = prevMin.current - extent.min
     if (deltaCols !== 0) {
       el.scrollLeft += deltaCols * colW
+      alignedAt.current = el.scrollLeft
       prevMin.current = extent.min
     }
-  }, [zoom, extent.min, extent.max, colW, alignNonce, scrollRef])
+    publishWindow(el)
+    return () => cancelAnimationFrame(raf)
+  }, [zoom, extent.min, extent.max, colW, alignNonce, scrollRef, publishWindow])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
 
-    const readWindow = () => {
-      const { min, max } = extentRef.current
-      const width = colWRef.current
-      const z = zoomRef.current
-      const sl = el.scrollLeft
-      const visible = Math.max(width, el.clientWidth - GUTTER)
-      const i0 = min + Math.max(0, Math.floor(sl / width))
-      const i1 = min + Math.max(i0, Math.ceil((sl + visible) / width) - 1)
-      const start = columnAtIndex(z, i0).start
-      const end = columnAtIndex(z, i1).end
-      setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
-
+    const onScroll = () => {
+      publishWindow(el)
       if (!readyRef.current || pendingAlign.current) return
-      const lead = i0 - min
-      const trail = max - i1
-      if (lead < 14) {
-        setExtent((e) => (e.min === min - BUFFER_COLS ? e : { min: e.min - BUFFER_COLS, max: e.max }))
-      } else if (trail < 14) {
-        setExtent((e) => (e.max === max + BUFFER_COLS ? e : { min: e.min, max: e.max + BUFFER_COLS }))
+      if (el.scrollWidth <= el.clientWidth + colWRef.current) return
+      if (Math.abs(el.scrollLeft - alignedAt.current) < 2) return
+      const width = colWRef.current
+      if (el.scrollLeft < width * 6) {
+        setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
+      } else if (el.scrollLeft + el.clientWidth > el.scrollWidth - width * 6) {
+        setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
       }
     }
 
-    readWindow()
-    el.addEventListener('scroll', readWindow, { passive: true })
-    window.addEventListener('resize', readWindow)
-    return () => {
-      el.removeEventListener('scroll', readWindow)
-      window.removeEventListener('resize', readWindow)
-    }
-  }, [scrollRef])
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [scrollRef, publishWindow])
 
   return {
     columns,
     colW,
+    canvasWidth,
     extent,
     viewWindow,
+    firstVisible,
+    visibleCount,
     contextLabel: contextLabel(zoom, viewWindow),
     dateAtClientX,
     dateAtViewportCenter,
