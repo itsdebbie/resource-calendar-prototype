@@ -411,7 +411,7 @@ export function ResourceCalendar() {
   return (
     <Flex direction="column" gap="3" className="rc-root">
       <Card padding="0" className="rc-card">
-        <Flex direction="column">
+        <Flex direction="column" className="rc-body">
           <Flex direction="column" gap="2" className="rc-toolbar">
             <Flex alignItems="center" gap="4" wrap="wrap">
               <Flex alignItems="center" gap="2">

@@ -55,12 +55,12 @@ export function zoomStep(zoom: Zoom, direction: 1 | -1): Zoom {
 }
 
 export function columnWidth(zoom: Zoom, viewportPx = 980) {
-  const w = Math.max(420, viewportPx)
-  if (zoom === 'days') return Math.max(56, Math.round(w / 14))
-  if (zoom === 'weeks') return Math.max(72, Math.round(w / 12))
-  if (zoom === 'months') return Math.max(96, Math.round(w / 7))
-  if (zoom === 'quarters') return Math.max(132, Math.round(w / 5))
-  return Math.max(160, Math.round(w / 4))
+  const w = Math.min(2200, Math.max(420, viewportPx))
+  if (zoom === 'days') return Math.min(92, Math.max(56, Math.round(w / 14)))
+  if (zoom === 'weeks') return Math.min(120, Math.max(72, Math.round(w / 12)))
+  if (zoom === 'months') return Math.min(160, Math.max(96, Math.round(w / 7)))
+  if (zoom === 'quarters') return Math.min(220, Math.max(132, Math.round(w / 5)))
+  return Math.min(280, Math.max(160, Math.round(w / 4)))
 }
 
 function isoWeek(ts: number) {

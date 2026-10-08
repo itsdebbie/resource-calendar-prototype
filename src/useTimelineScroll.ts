@@ -133,7 +133,8 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const el = scrollRef.current
     if (!el) return
     const measure = () => {
-      const next = Math.max(400, el.clientWidth - GUTTER)
+      const visible = Math.min(el.clientWidth, el.getBoundingClientRect().width, window.innerWidth)
+      const next = Math.min(2200, Math.max(400, visible - GUTTER))
       setViewportPx((prev) => (Math.abs(prev - next) < 2 ? prev : next))
     }
     measure()
