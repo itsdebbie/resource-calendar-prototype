@@ -200,8 +200,8 @@ export function ResourceCalendar() {
       const el = scrollRef.current
       const date = iso ?? dateAtViewportCenter()
       if (offsetPx == null && el) {
-        const rect = el.getBoundingClientRect()
-        setAnchor(date, Math.max(0, (rect.width - GUTTER) / 2))
+        const viewW = Math.min(el.clientWidth, window.innerWidth)
+        setAnchor(date, Math.max(0, (viewW - GUTTER) / 2))
       } else {
         setAnchor(date, offsetPx ?? 0)
       }

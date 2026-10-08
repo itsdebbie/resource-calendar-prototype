@@ -16,9 +16,9 @@ import {
   type TimeWindow,
 } from './timeline'
 
-function extentAround(zoom: Zoom, iso: string, extra = 20) {
+function extentAround(zoom: Zoom, iso: string, extra = 24) {
   const idx = columnIndexAt(zoom, utc(iso))
-  return { min: idx - BUFFER_COLS, max: idx + BUFFER_COLS + extra }
+  return { min: idx, max: idx + BUFFER_COLS + extra }
 }
 
 function visiblePx(el: HTMLElement) {
@@ -83,9 +83,10 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   const dateAtViewportCenter = useCallback(() => {
     const el = scrollRef.current
     if (!el) return DEMO_TODAY
-    const rect = el.getBoundingClientRect()
-    return dateAtClientX(rect.left + GUTTER + Math.max(40, (rect.width - GUTTER) / 2))
-  }, [dateAtClientX, scrollRef])
+    const viewW = Math.min(el.clientWidth, window.innerWidth)
+    const x = el.scrollLeft + Math.max(40, (viewW - GUTTER) / 2)
+    return dateAtWorldX(zoom, extent.min, colW, x)
+  }, [scrollRef, zoom, extent.min, colW])
 
   const expandToIndex = useCallback((index: number) => {
     setExtent((e) => {
@@ -106,11 +107,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       anchorRef.current = { iso, offsetPx }
       pendingAlign.current = true
       readyRef.current = false
-      setExtent((e) => {
-        const idx = columnIndexAt(zoom, utc(iso))
-        if (idx >= e.min + 8 && idx <= e.max - 8) return e
-        return extentAround(zoom, iso)
-      })
+      setExtent(extentAround(zoom, iso))
       setAlignNonce((n) => n + 1)
     },
     [zoom],
@@ -233,8 +230,21 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       }
     }
 
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return
+      if (event.deltaX < -2 && el.scrollLeft <= 2) {
+        setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
+      } else if (event.deltaX > 2 && el.scrollLeft + el.clientWidth >= el.scrollWidth - 2) {
+        setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
+      }
+    }
+
     el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    el.addEventListener('wheel', onWheel, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+    }
   }, [scrollRef, publishWindow])
 
   return {
