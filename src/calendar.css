@@ -31,7 +31,8 @@
 .rc-grid-head,
 .rc-row {
   display: grid;
-  grid-template-columns: 280px auto;
+  grid-template-columns: 280px max-content;
+  width: max-content;
   min-width: 100%;
 }
 

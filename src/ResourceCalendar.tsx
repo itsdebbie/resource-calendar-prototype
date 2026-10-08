@@ -509,7 +509,12 @@ export function ResourceCalendar() {
           <div
             className={`rc-scroll${dragIds.size ? ' is-dragging' : ''}`}
             ref={scrollRef}
-            style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}
+            style={
+              {
+                ['--rc-cols' as string]: String(columns.length),
+                ['--rc-col-w' as string]: `${colW}px`,
+              } as CSSProperties
+            }
             onClick={(event) => {
               if (!(event.target instanceof Element)) return
               if (event.target.closest('.rc-bar, .rc-overlay')) return
