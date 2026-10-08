@@ -30,6 +30,7 @@ export type Phase = {
   name: string
   start: string
   end: string
+  offDays?: string[]
   color: string
   budgetHours?: number
   scheduledHours?: number
@@ -44,6 +45,7 @@ export type Assignment = {
   label: string
   start: string
   end: string
+  offDays?: string[]
   confirmed?: boolean
   kind?: 'unassigned'
 }
@@ -199,6 +201,14 @@ export const assignments: Assignment[] = [
     end: '2026-03-06',
   },
   {
+    id: 'kevin-site-check',
+    projectId: 'summit',
+    personId: 'kevin',
+    label: '8h',
+    start: '2026-01-15',
+    end: '2026-01-15',
+  },
+  {
     id: 'kevin-foundation',
     projectId: 'summit',
     personId: 'kevin',
@@ -305,12 +315,65 @@ export function hoursCaption(scheduled?: number, budget?: number) {
   return `${scheduled} / ${budget}h`
 }
 
-export function weeklyHours(personId: string) {
-  if (personId === 'david') return { booked: 60, cap: 40, over: true, detail: '40h/w on Summit + 20h on Apex' }
-  if (personId === 'danny') return { booked: 40, cap: 40, over: false, detail: '40h/w' }
-  if (personId === 'kevin') return { booked: 20, cap: 40, over: false, detail: '20h/w' }
-  if (personId === 'chris') return { booked: 0, cap: 40, over: false, detail: 'Available · 40h/w' }
-  return { booked: 0, cap: 40, over: false, detail: '' }
+export function weeklyCap(personId: string) {
+  if (personId === 'unassigned') return 0
+  return 40
+}
+
+/** 40h labels are weekly; 8h (or anything ≤12) is treated as hours that day. */
+export function hoursPerWorkday(row: Assignment) {
+  const n = parseInt(row.label, 10) || 0
+  if (n <= 12) return n
+  return n / 5
+}
+
+function isoFromTs(ts: number) {
+  return new Date(ts).toISOString().slice(0, 10)
+}
+
+export function workdaysInWindow(window: { start: number; end: number }) {
+  let n = 0
+  for (let t = window.start; t < window.end; t += 86400000) {
+    const day = new Date(t).getUTCDay()
+    if (day !== 0 && day !== 6) n += 1
+  }
+  return n
+}
+
+export function assignmentWorkdaysInWindow(row: Assignment, window: { start: number; end: number }) {
+  const off = new Set(row.offDays)
+  const a = Math.max(Date.parse(`${row.start}T00:00:00Z`), window.start)
+  const b = Math.min(Date.parse(`${row.end}T00:00:00Z`) + 86400000, window.end)
+  if (b <= a) return 0
+  let n = 0
+  for (let t = a; t < b; t += 86400000) {
+    const day = new Date(t).getUTCDay()
+    if (day === 0 || day === 6) continue
+    if (off.has(isoFromTs(t))) continue
+    n += 1
+  }
+  return n
+}
+
+export function personHoursInWindow(personId: string, rows: Assignment[], window: { start: number; end: number }) {
+  const mine = rows.filter((row) => row.personId === personId)
+  const booked = mine.reduce((sum, row) => sum + hoursPerWorkday(row) * assignmentWorkdaysInWindow(row, window), 0)
+  const cap = personId === 'unassigned' ? 0 : (weeklyCap(personId) / 5) * workdaysInWindow(window)
+  const bookedR = Math.round(booked)
+  const capR = Math.round(cap)
+  const names = mine
+    .filter((row) => assignmentWorkdaysInWindow(row, window) > 0)
+    .map((row) => `${row.label} ${projectById(row.projectId)?.name.split(' ')[0] ?? ''}`.trim())
+  return {
+    booked: bookedR,
+    cap: capR,
+    over: capR > 0 && bookedR > capR,
+    text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h`,
+    detail:
+      personId === 'unassigned'
+        ? names.join(' + ')
+        : `${bookedR}h scheduled / ${capR}h capacity in view${names.length ? ` · ${names.join(' + ')}` : ''}`,
+  }
 }
 
 /** 20h bars are a half day; 40h is a full 9–5. */

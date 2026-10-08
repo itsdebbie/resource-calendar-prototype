@@ -14,7 +14,7 @@ function App() {
           ]}
           description={
             <Text subdued>
-              Group by Projects prototype. Days show 9a–5p; months show hours. Bulk select works through monthly.
+              Continuous timeline — scroll, jump to a date, or pinch/ctrl-scroll to zoom. Technician hours follow the dates on screen.
             </Text>
           }
         />

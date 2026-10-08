@@ -1,4 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react'
 import {
   Avatar,
   Button,
@@ -20,28 +31,75 @@ import {
   hoursOver,
   people,
   personById,
+  personHoursInWindow,
   phaseById,
   phases,
   projectById,
   projects,
-  weeklyHours,
   zoomBarLabel,
   type Assignment,
   type GroupBy,
   type Project,
   type Zoom,
 } from './data'
-import { barStyle, bulkAllowed, columnForDate, columnWidth, DEMO_TODAY, getColumns, monthBands, packLanes, RANGE_START, utc, type TimeWindow } from './timeline'
-import { CheckIcon, DeleteIcon, DuplicateIcon, EditIcon, ExpandMoreIcon, RangeIcon } from './icons'
+import {
+  DEMO_TODAY,
+  GUTTER,
+  activeSegments,
+  barStyle,
+  contextLabel as contextCaption,
+  diffDays,
+  emptySpan,
+  formatRange,
+  isDayZoom,
+  monthBands,
+  moveOneDay,
+  packLanes,
+  resizeSpanEnd,
+  segmentIsSliver,
+  shiftSpan,
+  zoomStep,
+  type Column,
+  type Span,
+  type TimeWindow,
+} from './timeline'
+import { useTimelineScroll } from './useTimelineScroll'
+import { CheckIcon, DeleteIcon, DuplicateIcon, EditIcon, ExpandMoreIcon, RangeIcon, ZoomInIcon, ZoomOutIcon } from './icons'
 import './calendar.css'
 
 type Selection = string
+type DragMode = 'move' | 'resize' | 'day'
+type DragState = {
+  mode: DragMode
+  ids: string[]
+  originDate: string
+  fromDay: string
+  snapshot: Record<string, Span>
+  lastX: number
+  moved: boolean
+}
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
 
-function personMeta(personId: string) {
-  const hours = weeklyHours(personId)
-  return { text: `${hours.booked} / ${hours.cap}h`, detail: hours.detail, danger: hours.over }
+type GanttCtx = {
+  zoom: Zoom
+  columns: Column[]
+  visColumns: Column[]
+  colW: number
+  viewWindow: TimeWindow
+  selectedKeys: Set<string>
+  dragIds: Set<string>
+  resolve: (id: string, start: string, end: string, offDays?: string[]) => Span
+  onBarClick: (id: string) => void
+  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
+}
+
+const GanttContext = createContext<GanttCtx | null>(null)
+
+function useGantt() {
+  const ctx = useContext(GanttContext)
+  if (!ctx) throw new Error('Gantt context missing')
+  return ctx
 }
 
 function HoursReadout({
@@ -78,58 +136,9 @@ function HoursReadout({
   )
 }
 
-function fallbackWindow(columns: ReturnType<typeof getColumns>, zoom: Zoom): TimeWindow {
-  if ((zoom === 'days' || zoom === 'weeks') && columns.length > 0) {
-    const today = utc(DEMO_TODAY)
-    return { start: today - 14 * 86400000, end: today + 21 * 86400000 }
-  }
-  return { start: columns[0]?.start ?? 0, end: columns[columns.length - 1]?.end ?? 0 }
-}
-
-function useVisibleWindow(
-  scrollRef: RefObject<HTMLDivElement | null>,
-  columns: ReturnType<typeof getColumns>,
-  zoom: Zoom,
-  focusDate: string,
-): TimeWindow {
-  const [range, setRange] = useState<TimeWindow>(() => fallbackWindow(columns, zoom))
-
-  useLayoutEffect(() => {
-    const el = scrollRef.current
-    if (!el || columns.length === 0) {
-      setRange(fallbackWindow(columns, zoom))
-      return
-    }
-    const colW = columnWidth(zoom)
-    const gutter = 280
-
-    const measure = () => {
-      const sl = el.scrollLeft
-      const visible = Math.max(colW, el.clientWidth - gutter)
-      const i0 = Math.max(0, Math.floor(sl / colW) - 1)
-      const i1 = Math.min(columns.length - 1, Math.ceil((sl + visible) / colW) + 1)
-      const next = { start: columns[i0]!.start, end: columns[i1]!.end }
-      setRange((prev) => (prev.start === next.start && prev.end === next.end ? prev : next))
-    }
-
-    measure()
-    const frame = requestAnimationFrame(measure)
-    el.addEventListener('scroll', measure, { passive: true })
-    window.addEventListener('resize', measure)
-    return () => {
-      cancelAnimationFrame(frame)
-      el.removeEventListener('scroll', measure)
-      window.removeEventListener('resize', measure)
-    }
-  }, [columns, zoom, scrollRef, focusDate])
-
-  return range
-}
-
 export function ResourceCalendar() {
   const [groupBy, setGroupBy] = useState<GroupBy>('projects')
-  const [zoom, setZoom] = useState<Zoom>('months')
-  const [focusDate, setFocusDate] = useState(DEMO_TODAY)
+  const [zoom, setZoom] = useState<Zoom>('days')
   const [query, setQuery] = useState('')
   const [openIds, setOpenIds] = useState<Set<string>>(DEFAULT_OPEN)
   const [selected, setSelected] = useState<Selection[]>([])
@@ -138,28 +147,100 @@ export function ResourceCalendar() {
   const [editHours, setEditHours] = useState('8')
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [activeProjects, setActiveProjects] = useState<string[]>(['summit', 'apex', 'monolith'])
+  const [spans, setSpans] = useState<Record<string, Span>>({})
+  const [goTo, setGoTo] = useState(DEMO_TODAY)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<DragState | null>(null)
+  const ignoreClick = useRef(false)
+  const [dragIds, setDragIds] = useState<Set<string>>(new Set())
+  const zoomLock = useRef(0)
 
-  const columns = useMemo(() => getColumns(zoom), [zoom])
-  const viewWindow = useVisibleWindow(scrollRef, columns, zoom, focusDate)
-  const canBulk = bulkAllowed(zoom)
+  const timeline = useTimelineScroll(zoom, scrollRef)
+  const { columns, colW, viewWindow, dateAtClientX, jumpTo, ensureDate, autoScrollFromPointer, setAnchor, dateAtViewportCenter } =
+    timeline
+
+  const visColumns = useMemo(() => {
+    const pad = 4
+    return columns.filter((col) => col.end > viewWindow.start - pad * 86400000 && col.start < viewWindow.end + pad * 86400000)
+  }, [columns, viewWindow])
+
   const q = query.trim().toLowerCase()
-
   const visibleAssignments = assignments.filter((a) => !hidden.has(a.id))
   const selectedKeys = new Set(selected)
-  const showDateJump = zoom === 'days' || zoom === 'weeks'
 
-  function scrollToDate(iso: string) {
-    const col = columnForDate(columns, iso)
-    if (!col || !scrollRef.current) return
-    const node = scrollRef.current.querySelector(`[data-col="${col.id}"]`)
-    node?.scrollIntoView({ inline: 'center', block: 'nearest' })
-  }
+  const resolve = useCallback(
+    (id: string, start: string, end: string, offDays?: string[]) => spans[id] ?? emptySpan(start, end, offDays ?? []),
+    [spans],
+  )
 
-  useLayoutEffect(() => {
-    if (!showDateJump) return
-    scrollToDate(focusDate)
-  }, [zoom, focusDate, columns, showDateJump])
+  const spanById = useCallback(
+    (id: string): Span | undefined => {
+      if (spans[id]) return spans[id]
+      const phase = phases.find((p) => p.id === id)
+      if (phase) return emptySpan(phase.start, phase.end, phase.offDays ?? [])
+      const row = assignments.find((a) => a.id === id)
+      if (row) return emptySpan(row.start, row.end, row.offDays ?? [])
+      if (id.startsWith('proj-')) {
+        const project = projectById(id.slice(5))
+        if (project) return emptySpan(project.start, project.end)
+      }
+      return undefined
+    },
+    [spans],
+  )
+
+  const changeZoom = useCallback(
+    (next: Zoom, iso?: string, offsetPx?: number) => {
+      if (next === zoom) return
+      const el = scrollRef.current
+      const date = iso ?? dateAtViewportCenter()
+      if (offsetPx == null && el) {
+        const rect = el.getBoundingClientRect()
+        setAnchor(date, Math.max(0, (rect.width - GUTTER) / 2))
+      } else {
+        setAnchor(date, offsetPx ?? 0)
+      }
+      setZoom(next)
+      setSelected([])
+    },
+    [zoom, dateAtViewportCenter, setAnchor],
+  )
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      const now = performance.now()
+      if (now - zoomLock.current < 160) return
+      zoomLock.current = now
+      const rect = el.getBoundingClientRect()
+      const iso = dateAtClientX(event.clientX)
+      const offset = event.clientX - rect.left - GUTTER
+      changeZoom(zoomStep(zoom, event.deltaY < 0 ? -1 : 1), iso, offset)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoom, dateAtClientX, changeZoom])
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
+      const plus = event.key === '=' || event.key === '+'
+      const minus = event.key === '-' || event.key === '_'
+      if (!plus && !minus) return
+      if (event.metaKey || event.ctrlKey || plus || minus) {
+        event.preventDefault()
+        const el = scrollRef.current
+        const rect = el?.getBoundingClientRect()
+        changeZoom(zoomStep(zoom, plus ? -1 : 1), dateAtViewportCenter(), rect ? Math.max(0, (rect.width - GUTTER) / 2) : 0)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [zoom, changeZoom, dateAtViewportCenter])
 
   useEffect(() => {
     if (selected.length === 0) return
@@ -174,27 +255,121 @@ export function ResourceCalendar() {
     return () => document.removeEventListener('click', onClickAway, true)
   }, [selected.length])
 
-  function toggleOpen(id: string) {
-    setOpenIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const applyDrag = useCallback(
+    (clientX: number) => {
+      const drag = dragRef.current
+      if (!drag) return
+      autoScrollFromPointer(clientX)
+      const date = dateAtClientX(clientX)
+      const delta = diffDays(drag.originDate, date)
+      if (Math.abs(delta) > 0 || date !== drag.fromDay) drag.moved = true
+      const next: Record<string, Span> = {}
+      if (drag.mode === 'day') {
+        const id = drag.ids[0]
+        const snap = id ? drag.snapshot[id] : undefined
+        if (id && snap) {
+          next[id] = moveOneDay(snap, drag.fromDay, date)
+          ensureDate(date)
+        }
+      } else if (drag.mode === 'resize') {
+        const id = drag.ids[0]
+        const snap = id ? drag.snapshot[id] : undefined
+        if (id && snap) {
+          next[id] = resizeSpanEnd(snap, date)
+          ensureDate(date)
+        }
+      } else {
+        for (const id of drag.ids) {
+          const snap = drag.snapshot[id]
+          if (!snap) continue
+          next[id] = shiftSpan(snap, delta)
+          ensureDate(next[id].start)
+          ensureDate(next[id].end)
+        }
+      }
+      if (Object.keys(next).length) setSpans((prev) => ({ ...prev, ...next }))
+    },
+    [autoScrollFromPointer, dateAtClientX, ensureDate],
+  )
+
+  useEffect(() => {
+    function onMove(event: PointerEvent) {
+      if (!dragRef.current) return
+      dragRef.current.lastX = event.clientX
+      applyDrag(event.clientX)
+    }
+    function onUp() {
+      if (!dragRef.current) return
+      const drag = dragRef.current
+      dragRef.current = null
+      setDragIds(new Set())
+      document.body.classList.remove('rc-grabbing')
+      if (drag.moved) ignoreClick.current = true
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [applyDrag])
+
+  useEffect(() => {
+    if (dragIds.size === 0) return
+    let frame = 0
+    const tick = () => {
+      const drag = dragRef.current
+      if (drag) applyDrag(drag.lastX)
+      frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [dragIds, applyDrag])
 
   function onBarClick(id: string) {
-    if (!canBulk) {
-      toast.warning({
-        title: 'Bulk select is off at this zoom',
-        message: 'Jade’s lock: bulk edit through monthly. Zoom to Days, Weeks, or Months to select.',
-      })
+    if (ignoreClick.current) {
+      ignoreClick.current = false
       return
     }
     setSelected((prev) => {
       if (rangeMode) return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
       if (prev.length === 1 && prev[0] === id) return []
       return [id]
+    })
+  }
+
+  function onBarPointerDown(event: ReactPointerEvent, id: string, span: Span, mode: DragMode) {
+    event.preventDefault()
+    event.stopPropagation()
+    const originDate = dateAtClientX(event.clientX)
+    const ids =
+      mode === 'move' && selectedKeys.has(id) && selected.length > 1
+        ? selected.filter((key) => spanById(key))
+        : [id]
+    const snapshot: Record<string, Span> = {}
+    for (const key of ids) {
+      const value = key === id ? span : spanById(key)
+      if (value) snapshot[key] = value
+    }
+    dragRef.current = {
+      mode,
+      ids,
+      originDate,
+      fromDay: originDate,
+      snapshot,
+      lastX: event.clientX,
+      moved: false,
+    }
+    setDragIds(new Set(ids))
+    document.body.classList.add('rc-grabbing')
+  }
+
+  function toggleOpen(id: string) {
+    setOpenIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
     })
   }
 
@@ -213,53 +388,65 @@ export function ResourceCalendar() {
     (p) =>
       matches(p.name) ||
       visibleAssignments.some(
-        (a) =>
-          a.personId === p.id &&
-          (projectById(a.projectId)?.name.toLowerCase().includes(q) ?? false),
+        (a) => a.personId === p.id && (projectById(a.projectId)?.name.toLowerCase().includes(q) ?? false),
       ),
   )
+
+  const gantt: GanttCtx = {
+    zoom,
+    columns,
+    visColumns,
+    colW,
+    viewWindow,
+    selectedKeys,
+    dragIds,
+    resolve,
+    onBarClick,
+    onBarPointerDown,
+  }
+
+  const canZoomIn = zoom !== 'days'
+  const canZoomOut = zoom !== 'year'
 
   return (
     <Flex direction="column" gap="3" className="rc-root">
       <Card padding="0" className="rc-card">
         <Flex direction="column">
-        <Flex direction="column" gap="2" className="rc-toolbar">
-          <Flex alignItems="center" gap="4" wrap="wrap">
-            <Flex alignItems="center" gap="2">
-              <Text size="small" subdued>
-                Group by
-              </Text>
-              <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
-                <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
-                <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
-              </SegmentedControl>
-            </Flex>
-            <Flex alignItems="center" gap="2">
-              <Text size="small" subdued>
-                Zoom
-              </Text>
-              <SegmentedControl
-                size="small"
-                selected={zoom}
-                onChange={(value) => {
-                  setZoom(value as Zoom)
-                  setSelected([])
-                }}
-              >
-                <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
-                <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
-                <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
-                <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
-                <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-              </SegmentedControl>
-            </Flex>
-            {showDateJump ? (
+          <Flex direction="column" gap="2" className="rc-toolbar">
+            <Flex alignItems="center" gap="4" wrap="wrap">
+              <Flex alignItems="center" gap="2">
+                <Text size="small" subdued>
+                  Group by
+                </Text>
+                <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
+                  <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
+                </SegmentedControl>
+              </Flex>
+              <Flex alignItems="center" gap="2">
+                <Text size="small" subdued>
+                  Zoom
+                </Text>
+                <Button size="small" icon={ZoomInIcon} disabled={!canZoomIn} onClick={() => changeZoom(zoomStep(zoom, -1))}>
+                  In
+                </Button>
+                <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+                  <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                </SegmentedControl>
+                <Button size="small" icon={ZoomOutIcon} disabled={!canZoomOut} onClick={() => changeZoom(zoomStep(zoom, 1))}>
+                  Out
+                </Button>
+              </Flex>
               <Flex alignItems="center" gap="2">
                 <Button
                   size="small"
                   onClick={() => {
-                    setFocusDate(DEMO_TODAY)
-                    scrollToDate(DEMO_TODAY)
+                    setGoTo(DEMO_TODAY)
+                    jumpTo(DEMO_TODAY, 0)
                   }}
                 >
                   Today
@@ -270,145 +457,99 @@ export function ResourceCalendar() {
                   </Text>
                   <input
                     type="date"
-                    min={RANGE_START}
-                    max="2026-06-26"
-                    value={focusDate}
+                    value={goTo}
                     onChange={(event) => {
                       const next = event.target.value || DEMO_TODAY
-                      setFocusDate(next)
+                      setGoTo(next)
+                      jumpTo(next, 0)
                     }}
                   />
                 </label>
               </Flex>
-            ) : null}
-            <SearchField
-              size="small"
-              placeholder="Filter people or projects"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onClear={() => setQuery('')}
-            />
-            <Button size="small" onClick={() => setOpenIds(new Set())}>
-              Collapse all
-            </Button>
-            <Button
-              size="small"
-              onClick={() =>
-                setOpenIds(new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned']))
-              }
-            >
-              Expand all
-            </Button>
-          </Flex>
-          <Flex alignItems="center" gap="2" wrap="wrap">
-            <Text size="small" subdued>
-              In this range
-            </Text>
-            {projects
-              .filter((p) => !p.leftover)
-              .map((p) => (
-                <Chip
-                  key={p.id}
-                  size="small"
-                  label={p.name.split(' ')[0] ?? p.name}
-                  color={activeProjects.includes(p.id) ? p.color : undefined}
-                  onClick={() =>
-                    setActiveProjects((prev) => (prev.includes(p.id) ? prev.filter((id) => id !== p.id) : [...prev, p.id]))
-                  }
-                />
-              ))}
-            {!canBulk ? (
-              <Chip size="small" label="Bulk select off" color="#d62100" />
-            ) : (
-              <Chip size="small" label={rangeMode ? 'Click the end of the range' : 'Click a bar to select'} />
-            )}
-          </Flex>
-        </Flex>
-
-        <div
-          className="rc-scroll"
-          ref={scrollRef}
-          style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${columnWidth(zoom)}px` }}
-          onClick={(event) => {
-            if (!(event.target instanceof Element)) return
-            if (event.target.closest('.rc-bar, .rc-overlay')) return
-            setSelected([])
-          }}
-        >
-          <div className="rc-grid-head">
-            <div className="rc-gutter-head">
-              <Text size="small">{groupBy === 'projects' ? 'Project · Hours' : 'Person · Hours'}</Text>
-            </div>
-            <div
-              className="rc-head-timeline"
-              style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${columnWidth(zoom)}px` }}
-            >
-              {zoom === 'days' || zoom === 'weeks' ? (
-                <div className="rc-month-band">
-                  {monthBands(columns).map((band) => (
-                    <div
-                      className="rc-month-cell"
-                      key={band.id}
-                      style={{ width: `calc(var(--rc-col-w) * ${band.span})` }}
-                    >
-                      <Text size="small" subdued>
-                        {band.label}
-                      </Text>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              <div className="rc-cols">
-                {columns.map((col) => (
-                  <div
-                    className={`rc-col${col.today ? ' is-today' : ''}${col.weekend ? ' is-weekend' : ''}`}
-                    data-col={col.id}
-                    key={col.id}
-                  >
-                    <Text size="small">{col.label}</Text>
-                    {zoom === 'days' ? null : (
-                      <Text size="small" subdued>
-                        {col.sublabel}
-                      </Text>
-                    )}
-                  </div>
+              <SearchField
+                size="small"
+                placeholder="Filter people or projects"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onClear={() => setQuery('')}
+              />
+              <Button size="small" onClick={() => setOpenIds(new Set())}>
+                Collapse all
+              </Button>
+              <Button
+                size="small"
+                onClick={() =>
+                  setOpenIds(new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned']))
+                }
+              >
+                Expand all
+              </Button>
+            </Flex>
+            <Flex alignItems="center" gap="2" wrap="wrap">
+              <Text size="small" subdued>
+                Projects
+              </Text>
+              {projects
+                .filter((p) => !p.leftover)
+                .map((p) => (
+                  <Chip
+                    key={p.id}
+                    size="small"
+                    label={p.name.split(' ')[0] ?? p.name}
+                    color={activeProjects.includes(p.id) ? p.color : undefined}
+                    onClick={() =>
+                      setActiveProjects((prev) => (prev.includes(p.id) ? prev.filter((id) => id !== p.id) : [...prev, p.id]))
+                    }
+                  />
                 ))}
-              </div>
-            </div>
-          </div>
+              <Chip size="small" label={rangeMode ? 'Click another bar to add it' : 'Click a bar · drag to move'} />
+            </Flex>
+          </Flex>
 
-          {groupBy === 'projects'
-            ? projectList.map((project) => (
-                <ProjectBlock
-                  key={project.id}
-                  project={project}
-                  open={openIds.has(project.id)}
-                  onToggle={() => toggleOpen(project.id)}
-                  zoom={zoom}
-                  columns={columns}
-                  viewWindow={viewWindow}
-                  assignments={visibleAssignments.filter((a) => a.projectId === project.id)}
-                  canBulk={canBulk}
-                  selectedKeys={selectedKeys}
-                  onBarClick={onBarClick}
-                />
-              ))
-            : personList.map((entry) => (
-                <PersonBlock
-                  key={entry.id}
-                  personId={entry.id}
-                  open={openIds.has(entry.id)}
-                  onToggle={() => toggleOpen(entry.id)}
-                  zoom={zoom}
-                  columns={columns}
-                  viewWindow={viewWindow}
-                  assignments={visibleAssignments.filter((a) => a.personId === entry.id)}
-                  canBulk={canBulk}
-                  selectedKeys={selectedKeys}
-                  onBarClick={onBarClick}
-                />
-              ))}
-        </div>
+          <div
+            className={`rc-scroll${dragIds.size ? ' is-dragging' : ''}`}
+            ref={scrollRef}
+            style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}
+            onClick={(event) => {
+              if (!(event.target instanceof Element)) return
+              if (event.target.closest('.rc-bar, .rc-overlay')) return
+              setSelected([])
+            }}
+          >
+            <GanttContext.Provider value={gantt}>
+              <div className="rc-grid-head">
+                <div className="rc-gutter-head">
+                  <Flex direction="column" gap="1">
+                    <Text size="small">{groupBy === 'projects' ? 'Project · Hours' : 'Person · Hours'}</Text>
+                    <Text size="small" className="rc-context-label">
+                      {timeline.contextLabel || contextCaption(zoom, viewWindow)}
+                    </Text>
+                  </Flex>
+                </div>
+                <TimelineHeader zoom={zoom} columns={columns} visColumns={visColumns} colW={colW} />
+              </div>
+
+              {groupBy === 'projects'
+                ? projectList.map((project) => (
+                    <ProjectBlock
+                      key={project.id}
+                      project={project}
+                      open={openIds.has(project.id)}
+                      onToggle={() => toggleOpen(project.id)}
+                      assignments={visibleAssignments.filter((a) => a.projectId === project.id)}
+                    />
+                  ))
+                : personList.map((entry) => (
+                    <PersonBlock
+                      key={entry.id}
+                      personId={entry.id}
+                      open={openIds.has(entry.id)}
+                      onToggle={() => toggleOpen(entry.id)}
+                      assignments={visibleAssignments.filter((a) => a.personId === entry.id)}
+                    />
+                  ))}
+            </GanttContext.Provider>
+          </div>
         </Flex>
       </Card>
 
@@ -416,9 +557,15 @@ export function ResourceCalendar() {
         <div className="rc-bulk-bar">
           <div className="rc-bulk-bar-copy">
             <Text>
-              <strong>{selected.length}</strong> item{selected.length === 1 ? '' : 's'} selected
+              <strong>{selected.length}</strong> bar{selected.length === 1 ? '' : 's'} selected
             </Text>
-            <Button appearance="ghost" onClick={() => { setSelected([]); setRangeMode(false) }}>
+            <Button
+              appearance="ghost"
+              onClick={() => {
+                setSelected([])
+                setRangeMode(false)
+              }}
+            >
               Clear Selection
             </Button>
           </div>
@@ -428,7 +575,7 @@ export function ResourceCalendar() {
               icon={RangeIcon}
               onClick={() => {
                 setRangeMode(true)
-                toast.info({ title: 'Select Range', message: 'Click another bar to add it to the selection.' })
+                toast.info({ title: 'Select Range', message: 'Click another bar to add the whole bar to the selection.' })
               }}
             >
               Select Range
@@ -448,7 +595,7 @@ export function ResourceCalendar() {
                 setHidden((prev) => new Set([...prev, ...ids]))
                 setSelected([])
                 setRangeMode(false)
-                toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype range.' })
+                toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype.' })
               }}
             >
               Delete
@@ -468,11 +615,15 @@ export function ResourceCalendar() {
       ) : null}
 
       <Dialog open={editOpen} onClose={() => setEditOpen(false)}>
-        <Dialog.Header>Bulk edit</Dialog.Header>
+        <Dialog.Header>{isDayZoom(zoom) ? 'Edit day' : 'Edit bar'}</Dialog.Header>
         <Dialog.Content>
           <Flex direction="column" gap="3">
-            <Text subdued>Edits hours on the selected bar{selected.length === 1 ? '' : 's'} only.</Text>
-            <TextField name="hours" label="Hours per day" value={editHours} onChange={(e) => setEditHours(e.target.value)} />
+            <Text subdued>
+              {isDayZoom(zoom)
+                ? 'Hours apply to the selected day. Switch to Weeks or wider to move or resize the whole bar.'
+                : 'Edits hours on the selected bar' + (selected.length === 1 ? '' : 's') + '.'}
+            </Text>
+            <TextField name="hours" label={isDayZoom(zoom) ? 'Hours this day' : 'Hours per day'} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
           </Flex>
         </Dialog.Content>
         <Dialog.Footer>
@@ -482,7 +633,7 @@ export function ResourceCalendar() {
             onClick={() => {
               setEditOpen(false)
               setSelected([])
-              toast.success({ title: 'Updated', message: `Set ${editHours} hours on ${selected.length} item${selected.length === 1 ? '' : 's'}.` })
+              toast.success({ title: 'Updated', message: `Set ${editHours} hours on ${selected.length} bar${selected.length === 1 ? '' : 's'}.` })
             }}
           >
             Save
@@ -493,8 +644,64 @@ export function ResourceCalendar() {
   )
 }
 
-function isBarSelected(id: string, selectedKeys: Set<string>) {
-  return selectedKeys.has(id)
+function TimelineHeader({
+  zoom,
+  columns,
+  visColumns,
+  colW,
+}: {
+  zoom: Zoom
+  columns: Column[]
+  visColumns: Column[]
+  colW: number
+}) {
+  const showMonthBand = zoom === 'days' || zoom === 'weeks'
+  const minIndex = columns[0]?.index ?? 0
+  return (
+    <div className="rc-head-timeline" style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}>
+      {showMonthBand ? (
+        <div className="rc-month-band">
+          {monthBands(columns).map((band) => (
+            <div
+              className="rc-month-cell"
+              key={band.id}
+              style={{ left: (band.startIndex - minIndex) * colW, width: colW * band.span }}
+            >
+              <span>{band.label}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="rc-cols">
+        {visColumns.map((col) => (
+          <div
+            className={`rc-col${col.today ? ' is-today' : ''}${col.weekend ? ' is-weekend' : ''}`}
+            data-col={col.id}
+            key={col.id}
+            style={{ ['--rc-i' as string]: col.index - minIndex }}
+          >
+            {zoom === 'days' ? (
+              <>
+                <Text size="small" subdued>
+                  {col.sublabel}
+                </Text>
+                <Text size="small">{col.label}</Text>
+              </>
+            ) : (
+              <>
+                <Text size="small">{col.label}</Text>
+                {col.sublabel ? (
+                  <Text size="small" subdued>
+                    {col.sublabel}
+                  </Text>
+                ) : null}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function durationBarLabel(project: Project) {
@@ -505,28 +712,18 @@ function ProjectBlock({
   project,
   open,
   onToggle,
-  zoom,
-  columns,
-  viewWindow,
   assignments: rows,
-  canBulk,
-  selectedKeys,
-  onBarClick,
 }: {
   project: Project
   open: boolean
   onToggle: () => void
-  zoom: Zoom
-  columns: ReturnType<typeof getColumns>
-  viewWindow: TimeWindow
   assignments: Assignment[]
-  canBulk: boolean
-  selectedKeys: Set<string>
-  onBarClick: (id: string) => void
 }) {
+  const { viewWindow, resolve, selectedKeys } = useGantt()
   const projectPhases = phases.filter((p) => p.projectId === project.id)
   const techs = [...new Set(rows.filter((r) => r.personId !== 'unassigned').map((r) => r.personId))]
-  const sparkline = packLanes(projectPhases, viewWindow)
+  const phaseSpans = projectPhases.map((phase) => ({ ...phase, ...resolve(phase.id, phase.start, phase.end, phase.offDays) }))
+  const sparkline = packLanes(phaseSpans, viewWindow)
   const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
   const phaseHint = projectPhases
     .map((phase) => {
@@ -535,6 +732,7 @@ function ProjectBlock({
     })
     .join(' · ')
   const projectName = project.name.replace(' Tentative', '')
+  const projectSpan = resolve(`proj-${project.id}`, project.start, project.end)
 
   return (
     <>
@@ -565,69 +763,40 @@ function ProjectBlock({
             />
           </Flex>
         </div>
-        <Timeline columns={columns} packed={projectPhases.length > 0 ? sparkline : undefined} thin={!open}>
+        <Timeline packed={projectPhases.length > 0 ? sparkline : undefined} thin={!open}>
           {project.leftover ? null : projectPhases.length > 0 ? (
-            projectPhases.map((phase) => {
+            phaseSpans.map((phase) => {
               const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
               const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
               return (
-                <Bar
+                <SpanBar
                   key={phase.id}
-                  start={phase.start}
-                  end={phase.end}
-                  columns={columns}
+                  id={phase.id}
+                  span={phase}
                   color={phase.color}
                   label={open ? (cap ? `${phase.name} · ${cap}` : phase.name) : undefined}
                   thin={!open}
-                  canBulk={canBulk}
-                  selected={isBarSelected(phase.id, selectedKeys)}
+                  selected={selectedKeys.has(phase.id)}
                   lane={sparkline.laneById.get(phase.id) ?? 0}
-                  onClick={() => onBarClick(phase.id)}
                   hint={`${phase.name} · ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual${over ? ' · over budget' : ''}`}
                 />
               )
             })
           ) : (
-            <Bar
-              start={project.start}
-              end={project.end}
-              columns={columns}
+            <SpanBar
+              id={`proj-${project.id}`}
+              span={projectSpan}
               color={project.color}
               label={open ? durationBarLabel(project) : undefined}
               thin={!open}
-              canBulk={canBulk}
-              selected={isBarSelected(`proj-${project.id}`, selectedKeys)}
-              onClick={() => onBarClick(`proj-${project.id}`)}
+              selected={selectedKeys.has(`proj-${project.id}`)}
             />
           )}
         </Timeline>
       </div>
-      {open && !project.leftover ? (
-        <UnassignedRow
-          zoom={zoom}
-          viewWindow={viewWindow}
-          rows={rows.filter((r) => r.kind === 'unassigned')}
-          columns={columns}
-          canBulk={canBulk}
-          selectedKeys={selectedKeys}
-          onBarClick={onBarClick}
-        />
-      ) : null}
+      {open && !project.leftover ? <UnassignedRow rows={rows.filter((r) => r.kind === 'unassigned')} /> : null}
       {open && !project.leftover
-        ? techs.map((personId) => (
-            <PersonAssignmentRow
-              key={`${project.id}-${personId}`}
-              personId={personId}
-              projectId={project.id}
-              zoom={zoom}
-              viewWindow={viewWindow}
-              rows={rows.filter((r) => r.personId === personId)}
-              columns={columns}
-              canBulk={canBulk}
-              selectedKeys={selectedKeys}
-              onBarClick={onBarClick}
-            />
-          ))
+        ? techs.map((personId) => <PersonAssignmentRow key={`${project.id}-${personId}`} personId={personId} projectId={project.id} rows={rows.filter((r) => r.personId === personId)} />)
         : null}
       {open && project.leftover
         ? people
@@ -643,7 +812,7 @@ function ProjectBlock({
                     </Text>
                   </Flex>
                 </div>
-                <Timeline columns={columns} />
+                <Timeline />
               </div>
             ))
         : null}
@@ -655,35 +824,32 @@ function PersonBlock({
   personId,
   open,
   onToggle,
-  zoom,
-  columns,
-  viewWindow,
   assignments: rows,
-  canBulk,
-  selectedKeys,
-  onBarClick,
 }: {
   personId: string
   open: boolean
   onToggle: () => void
-  zoom: Zoom
-  columns: ReturnType<typeof getColumns>
-  viewWindow: TimeWindow
   assignments: Assignment[]
-  canBulk: boolean
-  selectedKeys: Set<string>
-  onBarClick: (id: string) => void
 }) {
+  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
   const person = personId === 'unassigned' ? undefined : personById(personId)
-  const meta = personId === 'unassigned' ? { text: 'No technician · 40h on Summit', danger: false } : personMeta(personId)
+  const meta =
+    personId === 'unassigned'
+      ? { text: 'No technician', detail: rows.map((r) => r.label).join(' + '), over: false }
+      : personHoursInWindow(
+          personId,
+          assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
+          viewWindow,
+        )
   const grouped = projects
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
     .map((p) => ({ project: p, rows: rows.filter((r) => r.projectId === p.id) }))
-  const packed = packLanes(rows, viewWindow)
+  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+  const packed = packLanes(resolvedRows, viewWindow)
 
   return (
     <>
-      <div className={`rc-row is-group ${meta.danger ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
+      <div className={`rc-row is-group ${meta.over ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
@@ -691,74 +857,56 @@ function PersonBlock({
           {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
           <Flex direction="column" className="rc-gutter-copy">
             <Text>{person?.name ?? 'Unassigned'}</Text>
-            {meta.danger && 'detail' in meta && meta.detail ? (
-              <Tooltip openOnHover>
-                <Tooltip.Trigger>
-                  <Text size="small" className="a2-c-danger">
-                    {meta.text}
-                  </Text>
-                </Tooltip.Trigger>
-                <Tooltip.Content>{meta.detail}</Tooltip.Content>
-              </Tooltip>
-            ) : (
-              <Text size="small" className={meta.danger ? 'a2-c-danger' : undefined} subdued={!meta.danger}>
-                {meta.text}
-              </Text>
-            )}
+            <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
           </Flex>
         </div>
-        <Timeline columns={columns} packed={packed} thin={open}>
-          {rows.map((row) => (
-            <Bar
+        <Timeline packed={packed} thin={open}>
+          {resolvedRows.map((row) => (
+            <SpanBar
               key={row.id}
-              start={row.start}
-              end={row.end}
-              columns={columns}
+              id={row.id}
+              span={row}
               color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
               label={open ? undefined : zoomBarLabel(zoom, row)}
               thin={open}
               confirmed={row.confirmed}
               unassigned={row.kind === 'unassigned'}
-              canBulk={canBulk}
-              selected={isBarSelected(row.id, selectedKeys)}
+              selected={selectedKeys.has(row.id)}
               lane={packed.laneById.get(row.id) ?? 0}
-              onClick={() => onBarClick(row.id)}
             />
           ))}
         </Timeline>
       </div>
       {open
         ? grouped.map(({ project, rows: projectRows }) => {
-            const nested = packLanes(projectRows, viewWindow)
+            const nestedRows = projectRows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+            const nested = packLanes(nestedRows, viewWindow)
             return (
-            <div className={`rc-row rc-nested${nested.laneCount > 1 ? ' is-stacked' : ''}`} key={project.id}>
-              <div className="rc-gutter">
-                <Flex direction="column" className="rc-gutter-copy">
-                  <Text>{project.name.replace(' Tentative', '')}</Text>
-                  <Text size="small" subdued>
-                    {projectRows.map((r) => r.label).join(' + ')}
-                  </Text>
-                </Flex>
+              <div className={`rc-row rc-nested${nested.laneCount > 1 ? ' is-stacked' : ''}`} key={project.id}>
+                <div className="rc-gutter">
+                  <Flex direction="column" className="rc-gutter-copy">
+                    <Text>{project.name.replace(' Tentative', '')}</Text>
+                    <Text size="small" subdued>
+                      {projectRows.map((r) => r.label).join(' + ')}
+                    </Text>
+                  </Flex>
+                </div>
+                <Timeline packed={nested}>
+                  {nestedRows.map((row) => (
+                    <SpanBar
+                      key={row.id}
+                      id={row.id}
+                      span={row}
+                      color={assignmentColor(row, project.color)}
+                      label={zoomBarLabel(zoom, row)}
+                      confirmed={row.confirmed}
+                      unassigned={row.kind === 'unassigned'}
+                      selected={selectedKeys.has(row.id)}
+                      lane={nested.laneById.get(row.id) ?? 0}
+                    />
+                  ))}
+                </Timeline>
               </div>
-              <Timeline columns={columns} packed={nested}>
-                {projectRows.map((row) => (
-                  <Bar
-                    key={row.id}
-                    start={row.start}
-                    end={row.end}
-                    columns={columns}
-                    color={assignmentColor(row, project.color)}
-                    label={zoomBarLabel(zoom, row)}
-                    confirmed={row.confirmed}
-                    unassigned={row.kind === 'unassigned'}
-                    canBulk={canBulk}
-                    selected={isBarSelected(row.id, selectedKeys)}
-                    lane={nested.laneById.get(row.id) ?? 0}
-                    onClick={() => onBarClick(row.id)}
-                  />
-                ))}
-              </Timeline>
-            </div>
             )
           })
         : null}
@@ -766,28 +914,39 @@ function PersonBlock({
   )
 }
 
+function HoursMeta({ text, detail, danger }: { text: string; detail?: string; danger?: boolean }) {
+  if (danger && detail) {
+    return (
+      <Tooltip openOnHover>
+        <Tooltip.Trigger>
+          <Text size="small" className="a2-c-danger">
+            {text}
+          </Text>
+        </Tooltip.Trigger>
+        <Tooltip.Content>{detail}</Tooltip.Content>
+      </Tooltip>
+    )
+  }
+  return (
+    <Tooltip openOnHover>
+      <Tooltip.Trigger>
+        <Text size="small" className={danger ? 'a2-c-danger' : undefined} subdued={!danger}>
+          {text}
+        </Text>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{detail || text}</Tooltip.Content>
+    </Tooltip>
+  )
+}
+
 function assignmentColor(row: Assignment, fallback: string) {
   return phaseById(row.phaseId)?.color ?? fallback
 }
 
-function UnassignedRow({
-  zoom,
-  viewWindow,
-  rows,
-  columns,
-  canBulk,
-  selectedKeys,
-  onBarClick,
-}: {
-  zoom: Zoom
-  viewWindow: TimeWindow
-  rows: Assignment[]
-  columns: ReturnType<typeof getColumns>
-  canBulk: boolean
-  selectedKeys: Set<string>
-  onBarClick: (id: string) => void
-}) {
-  const packed = packLanes(rows, viewWindow)
+function UnassignedRow({ rows }: { rows: Assignment[] }) {
+  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
+  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+  const packed = packLanes(resolvedRows, viewWindow)
   if (rows.length === 0) return null
   return (
     <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
@@ -800,20 +959,17 @@ function UnassignedRow({
           </Text>
         </Flex>
       </div>
-      <Timeline columns={columns} packed={packed}>
-        {rows.map((row) => (
-          <Bar
+      <Timeline packed={packed}>
+        {resolvedRows.map((row) => (
+          <SpanBar
             key={row.id}
-            start={row.start}
-            end={row.end}
-            columns={columns}
+            id={row.id}
+            span={row}
             color={assignmentColor(row, '#e8e8e8')}
             label={zoomBarLabel(zoom, row)}
             unassigned
-            canBulk={canBulk}
-            selected={isBarSelected(row.id, selectedKeys)}
+            selected={selectedKeys.has(row.id)}
             lane={packed.laneById.get(row.id) ?? 0}
-            onClick={() => onBarClick(row.id)}
           />
         ))}
       </Timeline>
@@ -824,64 +980,42 @@ function UnassignedRow({
 function PersonAssignmentRow({
   personId,
   projectId,
-  zoom,
-  viewWindow,
   rows,
-  columns,
-  canBulk,
-  selectedKeys,
-  onBarClick,
 }: {
   personId: string
   projectId: string
-  zoom: Zoom
-  viewWindow: TimeWindow
   rows: Assignment[]
-  columns: ReturnType<typeof getColumns>
-  canBulk: boolean
-  selectedKeys: Set<string>
-  onBarClick: (id: string) => void
 }) {
+  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
   const person = personById(personId)
-  const meta = personMeta(personId)
-  const packed = packLanes(rows, viewWindow)
+  const meta = personHoursInWindow(
+    personId,
+    assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
+    viewWindow,
+  )
+  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+  const packed = packLanes(resolvedRows, viewWindow)
   if (!person) return null
   return (
-    <div className={`rc-row rc-nested ${meta.danger ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
+    <div className={`rc-row rc-nested ${meta.over ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
       <div className="rc-gutter">
         <Avatar name={person.name} size="small" color={person.color} />
         <Flex direction="column" className="rc-gutter-copy">
           <Text>{person.name}</Text>
-          {meta.danger ? (
-            <Tooltip openOnHover>
-              <Tooltip.Trigger>
-                <Text size="small" className="a2-c-danger">
-                  {meta.text}
-                </Text>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{meta.detail}</Tooltip.Content>
-            </Tooltip>
-          ) : (
-            <Text size="small" subdued>
-              {meta.text}
-            </Text>
-          )}
+          <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
         </Flex>
       </div>
-      <Timeline columns={columns} packed={packed}>
-        {rows.map((row) => (
-          <Bar
+      <Timeline packed={packed}>
+        {resolvedRows.map((row) => (
+          <SpanBar
             key={row.id}
-            start={row.start}
-            end={row.end}
-            columns={columns}
+            id={row.id}
+            span={row}
             color={assignmentColor(row, projectById(projectId)?.color ?? person.color)}
             label={zoomBarLabel(zoom, row)}
             confirmed={row.confirmed}
-            canBulk={canBulk}
-            selected={isBarSelected(row.id, selectedKeys)}
+            selected={selectedKeys.has(row.id)}
             lane={packed.laneById.get(row.id) ?? 0}
-            onClick={() => onBarClick(row.id)}
           />
         ))}
       </Timeline>
@@ -890,67 +1024,139 @@ function PersonAssignmentRow({
 }
 
 function Timeline({
-  columns,
   packed,
   thin,
   children,
 }: {
-  columns: ReturnType<typeof getColumns>
   packed?: { laneCount: number }
   thin?: boolean
   children?: ReactNode
 }) {
+  const { columns, visColumns, colW } = useGantt()
+  const minIndex = columns[0]?.index ?? 0
   const style = {
     ['--rc-lanes' as string]: String(packed?.laneCount ?? 1),
     ['--rc-cols' as string]: String(columns.length),
+    ['--rc-col-w' as string]: `${colW}px`,
   } as CSSProperties
   return (
     <div className={`rc-timeline${thin ? ' is-thin' : ''}${(packed?.laneCount ?? 1) <= 1 ? ' is-single' : ''}`} style={style}>
-      {columns.map((col) => (
-        <div className={`rc-cell${col.weekend ? ' is-weekend' : ''}${col.today ? ' is-today' : ''}`} key={col.id} />
+      {visColumns.map((col) => (
+        <div
+          className={`rc-cell${col.weekend ? ' is-weekend' : ''}${col.today ? ' is-today' : ''}`}
+          key={col.id}
+          style={{ ['--rc-i' as string]: col.index - minIndex }}
+        />
       ))}
       {children}
     </div>
   )
 }
 
-function Bar({
-  start,
-  end,
-  columns,
+function SpanBar({
+  id,
+  span,
   color,
   label,
   thin,
   confirmed,
   unassigned,
-  canBulk,
   selected,
   lane = 0,
   hint,
-  onClick,
 }: {
-  start: string
-  end: string
-  columns: ReturnType<typeof getColumns>
+  id: string
+  span: Span
   color: string
   label?: string
   thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
-  canBulk: boolean
   selected?: boolean
   lane?: number
   hint?: string
-  onClick: () => void
 }) {
-  const style = barStyle(start, end, columns)
-  if (!style.visible) return null
-  const title =
-    hint ?? `${label ?? ''} ${new Date(utc(start)).toUTCString().slice(5, 11)} – ${new Date(utc(end)).toUTCString().slice(5, 11)}`.trim()
+  const { zoom, columns, dragIds, onBarClick, onBarPointerDown } = useGantt()
+  const segs = activeSegments(span.start, span.end, span.offDays)
+  const wholeBar = !isDayZoom(zoom)
   return (
-    <button
-      type="button"
-      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${canBulk ? '' : ' is-disabled'}`}
+    <>
+      {segs.map((seg) => (
+        <BarSegment
+          key={`${id}-${seg.start}`}
+          id={id}
+          span={span}
+          seg={seg}
+          color={color}
+          label={label}
+          thin={thin}
+          confirmed={confirmed}
+          unassigned={unassigned}
+          selected={selected}
+          lane={lane}
+          hint={hint}
+          columns={columns}
+          zoom={zoom}
+          wholeBar={wholeBar}
+          dragging={dragIds.has(id)}
+          onBarClick={onBarClick}
+          onBarPointerDown={onBarPointerDown}
+        />
+      ))}
+    </>
+  )
+}
+
+function BarSegment({
+  id,
+  span,
+  seg,
+  color,
+  label,
+  thin,
+  confirmed,
+  unassigned,
+  selected,
+  lane,
+  hint,
+  columns,
+  zoom,
+  wholeBar,
+  dragging,
+  onBarClick,
+  onBarPointerDown,
+}: {
+  id: string
+  span: Span
+  seg: { start: string; end: string }
+  color: string
+  label?: string
+  thin?: boolean
+  confirmed?: boolean
+  unassigned?: boolean
+  selected?: boolean
+  lane: number
+  hint?: string
+  columns: Column[]
+  zoom: Zoom
+  wholeBar: boolean
+  dragging: boolean
+  onBarClick: (id: string) => void
+  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
+}) {
+  const style = barStyle(seg.start, seg.end, columns)
+  if (!style.visible) return null
+  const sliver = segmentIsSliver(seg.start, seg.end, zoom)
+  const title = hint ?? `${label ?? ''} ${formatRange(seg.start, seg.end)}`.trim()
+  const tooltip = sliver
+    ? `${label ? `${label} · ` : ''}${formatRange(seg.start, seg.end)}${seg.start === seg.end ? ' · 1 day' : ''}`
+    : title
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}`}
       style={
         {
           left: `calc(${style.left} + 3px)`,
@@ -961,15 +1167,34 @@ function Bar({
           '--rc-bar-color': color,
         } as CSSProperties
       }
-      title={title}
+      title={tooltip}
       onClick={(event) => {
         event.stopPropagation()
-        onClick()
+        if (!dragging) onBarClick(id)
+      }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        onBarPointerDown(event, id, span, wholeBar ? 'move' : 'day')
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onBarClick(id)
+        }
       }}
     >
-      {(confirmed || selected) && !thin ? <Icon svg={CheckIcon} size="small" inherit /> : null}
-      {!thin && label ? <span className="rc-bar-label">{label}</span> : null}
-    </button>
+      {(confirmed || selected) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null}
+      {!thin && label && !sliver ? <span className="rc-bar-label">{label}</span> : null}
+      {wholeBar && !thin ? (
+        <span
+          className="rc-bar-handle"
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            onBarPointerDown(event, id, span, 'resize')
+          }}
+        />
+      ) : null}
+    </div>
   )
 }
 
