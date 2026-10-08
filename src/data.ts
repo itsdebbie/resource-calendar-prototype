@@ -312,3 +312,16 @@ export function weeklyHours(personId: string) {
   if (personId === 'chris') return { booked: 0, cap: 40, over: false, detail: 'Available · 40h/w' }
   return { booked: 0, cap: 40, over: false, detail: '' }
 }
+
+/** 20h bars are a half day; 40h is a full 9–5. */
+export function clockLabel(row: { label: string }) {
+  return row.label.startsWith('20') ? '9a–1p' : '9a–5p'
+}
+
+export function zoomBarLabel(zoom: Zoom, row: Assignment) {
+  const phase = phaseById(row.phaseId)
+  const clock = clockLabel(row)
+  if (zoom === 'days') return phase ? `${phase.name} · ${clock}` : clock
+  if (zoom === 'weeks') return phase ? `${phase.name} · ${clock} · ${row.label}` : `${clock} · ${row.label}`
+  return phase ? `${phase.name} · ${row.label}` : row.label
+}

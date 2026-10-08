@@ -14,8 +14,7 @@ function App() {
           ]}
           description={
             <Text subdued>
-              Group by Projects prototype. Monthly is the construction-optimal zoom. Bulk select works through
-              monthly; quarter and year are larger chunks only.
+              Group by Projects prototype. Days show 9a–5p; months show hours. Bulk select works through monthly.
             </Text>
           }
         />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import {
   Avatar,
   Button,
@@ -25,23 +25,19 @@ import {
   projectById,
   projects,
   weeklyHours,
+  zoomBarLabel,
   type Assignment,
   type GroupBy,
-  type Phase,
   type Project,
   type Zoom,
 } from './data'
-import { barStyle, bulkAllowed, getColumns, overlappingColumns, packLanes, rangeOf, utc } from './timeline'
-import { CheckIcon, CloseIcon, ExpandMoreIcon } from './icons'
+import { barStyle, bulkAllowed, columnForDate, columnWidth, DEMO_TODAY, getColumns, monthBands, packLanes, RANGE_START, utc, type TimeWindow } from './timeline'
+import { CheckIcon, DeleteIcon, DuplicateIcon, EditIcon, ExpandMoreIcon, RangeIcon } from './icons'
 import './calendar.css'
 
-type Selection = { projectId: string; columnId: string }
+type Selection = string
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
-
-function selectionKey(s: Selection) {
-  return `${s.projectId}:${s.columnId}`
-}
 
 function personMeta(personId: string) {
   const hours = weeklyHours(personId)
@@ -70,44 +66,109 @@ function HoursReadout({
   const pct = budget > 0 ? Math.min(100, (scheduled / budget) * 100) : 0
   return (
     <div className="rc-hours">
-      <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
-        <span style={{ width: `${pct}%` }} />
-      </div>
-      <Text size="small" className={over ? 'a2-c-danger' : undefined} subdued={!over}>
-        {hoursCaption(scheduled, budget)}
-      </Text>
-      <Text size="small" subdued>
-        {actual ?? 0}h actual
+      {scheduled > 0 ? (
+        <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
+          <span style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
+      <Text size="small" className={`rc-hours-label${over ? ' is-over' : ''}`} subdued={!over}>
+        {hoursCaption(scheduled, budget)} · {actual ?? 0}h actual
       </Text>
     </div>
   )
 }
 
+function fallbackWindow(columns: ReturnType<typeof getColumns>, zoom: Zoom): TimeWindow {
+  if ((zoom === 'days' || zoom === 'weeks') && columns.length > 0) {
+    const today = utc(DEMO_TODAY)
+    return { start: today - 14 * 86400000, end: today + 21 * 86400000 }
+  }
+  return { start: columns[0]?.start ?? 0, end: columns[columns.length - 1]?.end ?? 0 }
+}
+
+function useVisibleWindow(
+  scrollRef: RefObject<HTMLDivElement | null>,
+  columns: ReturnType<typeof getColumns>,
+  zoom: Zoom,
+  focusDate: string,
+): TimeWindow {
+  const [range, setRange] = useState<TimeWindow>(() => fallbackWindow(columns, zoom))
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el || columns.length === 0) {
+      setRange(fallbackWindow(columns, zoom))
+      return
+    }
+    const colW = columnWidth(zoom)
+    const gutter = 280
+
+    const measure = () => {
+      const sl = el.scrollLeft
+      const visible = Math.max(colW, el.clientWidth - gutter)
+      const i0 = Math.max(0, Math.floor(sl / colW) - 1)
+      const i1 = Math.min(columns.length - 1, Math.ceil((sl + visible) / colW) + 1)
+      const next = { start: columns[i0]!.start, end: columns[i1]!.end }
+      setRange((prev) => (prev.start === next.start && prev.end === next.end ? prev : next))
+    }
+
+    measure()
+    const frame = requestAnimationFrame(measure)
+    el.addEventListener('scroll', measure, { passive: true })
+    window.addEventListener('resize', measure)
+    return () => {
+      cancelAnimationFrame(frame)
+      el.removeEventListener('scroll', measure)
+      window.removeEventListener('resize', measure)
+    }
+  }, [columns, zoom, scrollRef, focusDate])
+
+  return range
+}
+
 export function ResourceCalendar() {
   const [groupBy, setGroupBy] = useState<GroupBy>('projects')
   const [zoom, setZoom] = useState<Zoom>('months')
+  const [focusDate, setFocusDate] = useState(DEMO_TODAY)
   const [query, setQuery] = useState('')
   const [openIds, setOpenIds] = useState<Set<string>>(DEFAULT_OPEN)
   const [selected, setSelected] = useState<Selection[]>([])
+  const [rangeMode, setRangeMode] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editHours, setEditHours] = useState('8')
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [activeProjects, setActiveProjects] = useState<string[]>(['summit', 'apex', 'monolith'])
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const columns = useMemo(() => getColumns(zoom), [zoom])
+  const viewWindow = useVisibleWindow(scrollRef, columns, zoom, focusDate)
   const canBulk = bulkAllowed(zoom)
   const q = query.trim().toLowerCase()
 
   const visibleAssignments = assignments.filter((a) => !hidden.has(a.id))
-  const selectedKeys = new Set(selected.map(selectionKey))
+  const selectedKeys = new Set(selected)
+  const showDateJump = zoom === 'days' || zoom === 'weeks'
+
+  function scrollToDate(iso: string) {
+    const col = columnForDate(columns, iso)
+    if (!col || !scrollRef.current) return
+    const node = scrollRef.current.querySelector(`[data-col="${col.id}"]`)
+    node?.scrollIntoView({ inline: 'center', block: 'nearest' })
+  }
+
+  useLayoutEffect(() => {
+    if (!showDateJump) return
+    scrollToDate(focusDate)
+  }, [zoom, focusDate, columns, showDateJump])
 
   useEffect(() => {
     if (selected.length === 0) return
     function onClickAway(event: Event) {
       const target = event.target
       if (!(target instanceof Element)) return
-      if (target.closest('.rc-bar, .rc-overlay, .rc-bulk-bar, dialog, [role="dialog"]')) return
+      if (target.closest('.rc-bar, .rc-bulk-bar, dialog, [role="dialog"]')) return
       setSelected([])
+      setRangeMode(false)
     }
     document.addEventListener('click', onClickAway, true)
     return () => document.removeEventListener('click', onClickAway, true)
@@ -122,46 +183,19 @@ export function ResourceCalendar() {
     })
   }
 
-  function onBarClick(projectId: string, item: { start: string; end: string }) {
+  function onBarClick(id: string) {
     if (!canBulk) {
       toast.warning({
         title: 'Bulk select is off at this zoom',
-        message: 'Jade’s lock: bulk edit through monthly. Zoom to Days, Weeks, or Months to select chunks.',
+        message: 'Jade’s lock: bulk edit through monthly. Zoom to Days, Weeks, or Months to select.',
       })
       return
     }
-    const cols = overlappingColumns(item.start, item.end, columns)
     setSelected((prev) => {
-      const keys = new Set(prev.map(selectionKey))
-      const incoming = cols.map((col) => ({ projectId, columnId: col.id }))
-      const allOn = incoming.every((s) => keys.has(selectionKey(s)))
-      if (allOn) {
-        const drop = new Set(incoming.map(selectionKey))
-        return prev.filter((s) => !drop.has(selectionKey(s)))
-      }
-      const merged = [...prev]
-      for (const s of incoming) {
-        if (!keys.has(selectionKey(s))) merged.push(s)
-      }
-      return merged
+      if (rangeMode) return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      if (prev.length === 1 && prev[0] === id) return []
+      return [id]
     })
-  }
-
-  function overlaysFor(projectId: string) {
-    const { start, end } = rangeOf(columns)
-    const span = end - start
-    return selected
-      .filter((s) => s.projectId === projectId)
-      .map((s) => {
-        const col = columns.find((c) => c.id === s.columnId)
-        if (!col || span <= 0) return null
-        return {
-          key: selectionKey(s),
-          left: `${((col.start - start) / span) * 100}%`,
-          width: `${((col.end - col.start) / span) * 100}%`,
-        }
-      })
-      .filter((v) => v !== null)
   }
 
   const matches = (name: string) => !q || name.toLowerCase().includes(q)
@@ -186,7 +220,7 @@ export function ResourceCalendar() {
   )
 
   return (
-    <Flex direction="column" gap="3">
+    <Flex direction="column" gap="3" className="rc-root">
       <Card padding="0" className="rc-card">
         <Flex direction="column">
         <Flex direction="column" gap="2" className="rc-toolbar">
@@ -219,6 +253,34 @@ export function ResourceCalendar() {
                 <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
               </SegmentedControl>
             </Flex>
+            {showDateJump ? (
+              <Flex alignItems="center" gap="2">
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setFocusDate(DEMO_TODAY)
+                    scrollToDate(DEMO_TODAY)
+                  }}
+                >
+                  Today
+                </Button>
+                <label className="rc-date-jump">
+                  <Text size="small" subdued>
+                    Go to
+                  </Text>
+                  <input
+                    type="date"
+                    min={RANGE_START}
+                    max="2026-06-26"
+                    value={focusDate}
+                    onChange={(event) => {
+                      const next = event.target.value || DEMO_TODAY
+                      setFocusDate(next)
+                    }}
+                  />
+                </label>
+              </Flex>
+            ) : null}
             <SearchField
               size="small"
               placeholder="Filter people or projects"
@@ -255,12 +317,18 @@ export function ResourceCalendar() {
                   }
                 />
               ))}
-            {!canBulk ? <Chip size="small" label="Bulk select off" color="#d62100" /> : <Chip size="small" label="Click bars to bulk select" />}
+            {!canBulk ? (
+              <Chip size="small" label="Bulk select off" color="#d62100" />
+            ) : (
+              <Chip size="small" label={rangeMode ? 'Click the end of the range' : 'Click a bar to select'} />
+            )}
           </Flex>
         </Flex>
 
         <div
           className="rc-scroll"
+          ref={scrollRef}
+          style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${columnWidth(zoom)}px` }}
           onClick={(event) => {
             if (!(event.target instanceof Element)) return
             if (event.target.closest('.rc-bar, .rc-overlay')) return
@@ -271,15 +339,41 @@ export function ResourceCalendar() {
             <div className="rc-gutter-head">
               <Text size="small">{groupBy === 'projects' ? 'Project · Hours' : 'Person · Hours'}</Text>
             </div>
-            <div className="rc-cols" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
-              {columns.map((col) => (
-                <div className="rc-col" key={col.id}>
-                  <Text size="small">{col.label}</Text>
-                  <Text size="small" subdued>
-                    {col.sublabel}
-                  </Text>
+            <div
+              className="rc-head-timeline"
+              style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${columnWidth(zoom)}px` }}
+            >
+              {zoom === 'days' || zoom === 'weeks' ? (
+                <div className="rc-month-band">
+                  {monthBands(columns).map((band) => (
+                    <div
+                      className="rc-month-cell"
+                      key={band.id}
+                      style={{ width: `calc(var(--rc-col-w) * ${band.span})` }}
+                    >
+                      <Text size="small" subdued>
+                        {band.label}
+                      </Text>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : null}
+              <div className="rc-cols">
+                {columns.map((col) => (
+                  <div
+                    className={`rc-col${col.today ? ' is-today' : ''}${col.weekend ? ' is-weekend' : ''}`}
+                    data-col={col.id}
+                    key={col.id}
+                  >
+                    <Text size="small">{col.label}</Text>
+                    {zoom === 'days' ? null : (
+                      <Text size="small" subdued>
+                        {col.sublabel}
+                      </Text>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -290,10 +384,12 @@ export function ResourceCalendar() {
                   project={project}
                   open={openIds.has(project.id)}
                   onToggle={() => toggleOpen(project.id)}
+                  zoom={zoom}
                   columns={columns}
+                  viewWindow={viewWindow}
                   assignments={visibleAssignments.filter((a) => a.projectId === project.id)}
                   canBulk={canBulk}
-                  overlays={overlaysFor(project.id)}
+                  selectedKeys={selectedKeys}
                   onBarClick={onBarClick}
                 />
               ))
@@ -303,9 +399,12 @@ export function ResourceCalendar() {
                   personId={entry.id}
                   open={openIds.has(entry.id)}
                   onToggle={() => toggleOpen(entry.id)}
+                  zoom={zoom}
                   columns={columns}
+                  viewWindow={viewWindow}
                   assignments={visibleAssignments.filter((a) => a.personId === entry.id)}
                   canBulk={canBulk}
+                  selectedKeys={selectedKeys}
                   onBarClick={onBarClick}
                 />
               ))}
@@ -314,65 +413,65 @@ export function ResourceCalendar() {
       </Card>
 
       {selected.length > 0 ? (
-        <Card className="rc-bulk-bar" padding="small">
-          <Flex alignItems="center" justifyContent="space-between" gap="3">
+        <div className="rc-bulk-bar">
+          <div className="rc-bulk-bar-copy">
             <Text>
-              {selected.length} chunk{selected.length === 1 ? '' : 's'} selected · Edit / Delete / Click to Drop
+              <strong>{selected.length}</strong> item{selected.length === 1 ? '' : 's'} selected
             </Text>
-            <Flex gap="2">
-              <Button
-                size="small"
-                appearance="primary"
-                onClick={() => {
-                  setEditHours('8')
-                  setEditOpen(true)
-                }}
-              >
-                Edit
-              </Button>
-              <Button
-                size="small"
-                appearance="danger-secondary"
-                onClick={() => {
-                  const ids = new Set(
-                    visibleAssignments
-                      .filter((a) => overlappingColumns(a.start, a.end, columns).some((col) => selectedKeys.has(`${a.projectId}:${col.id}`)))
-                      .map((a) => a.id),
-                  )
-                  setHidden((prev) => new Set([...prev, ...ids]))
-                  setSelected([])
-                  toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype range.' })
-                }}
-              >
-                Delete
-              </Button>
-              <Button
-                size="small"
-                onClick={() => {
-                  toast.info({ title: 'Click to Drop', message: 'Drop mode is mocked — selected chunks stay highlighted until you Edit or clear.' })
-                }}
-              >
-                Click to Drop
-              </Button>
-              <Button
-                size="small"
-                appearance="ghost"
-                icon={CloseIcon}
-                aria-label="Clear selection"
-                onClick={() => setSelected([])}
-              />
-            </Flex>
-          </Flex>
-        </Card>
+            <Button appearance="ghost" onClick={() => { setSelected([]); setRangeMode(false) }}>
+              Clear Selection
+            </Button>
+          </div>
+          <div className="rc-bulk-bar-actions">
+            <Button
+              appearance="secondary"
+              icon={RangeIcon}
+              onClick={() => {
+                setRangeMode(true)
+                toast.info({ title: 'Select Range', message: 'Click another bar to add it to the selection.' })
+              }}
+            >
+              Select Range
+            </Button>
+            <Button appearance="secondary" icon={DuplicateIcon} onClick={() => toast.info({ title: 'Duplicate', message: 'Duplicate is mocked in this prototype.' })}>
+              Duplicate
+            </Button>
+            <Button
+              appearance="secondary"
+              icon={DeleteIcon}
+              onClick={() => {
+                const ids = new Set(
+                  visibleAssignments
+                    .filter((a) => selectedKeys.has(a.id) || (a.phaseId != null && selectedKeys.has(a.phaseId)) || selectedKeys.has(`proj-${a.projectId}`))
+                    .map((a) => a.id),
+                )
+                setHidden((prev) => new Set([...prev, ...ids]))
+                setSelected([])
+                setRangeMode(false)
+                toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype range.' })
+              }}
+            >
+              Delete
+            </Button>
+            <Button
+              appearance="secondary"
+              icon={EditIcon}
+              onClick={() => {
+                setEditHours('8')
+                setEditOpen(true)
+              }}
+            >
+              Edit
+            </Button>
+          </div>
+        </div>
       ) : null}
 
       <Dialog open={editOpen} onClose={() => setEditOpen(false)}>
         <Dialog.Header>Bulk edit</Dialog.Header>
         <Dialog.Content>
           <Flex direction="column" gap="3">
-            <Text subdued>
-              {selected.length} monthly-or-finer chunks. Technician stays hidden because this selection spans more than one row.
-            </Text>
+            <Text subdued>Edits hours on the selected bar{selected.length === 1 ? '' : 's'} only.</Text>
             <TextField name="hours" label="Hours per day" value={editHours} onChange={(e) => setEditHours(e.target.value)} />
           </Flex>
         </Dialog.Content>
@@ -383,7 +482,7 @@ export function ResourceCalendar() {
             onClick={() => {
               setEditOpen(false)
               setSelected([])
-              toast.success({ title: 'Updated', message: `Set ${editHours} hours on the selected chunks.` })
+              toast.success({ title: 'Updated', message: `Set ${editHours} hours on ${selected.length} item${selected.length === 1 ? '' : 's'}.` })
             }}
           >
             Save
@@ -394,29 +493,48 @@ export function ResourceCalendar() {
   )
 }
 
+function isBarSelected(id: string, selectedKeys: Set<string>) {
+  return selectedKeys.has(id)
+}
+
+function durationBarLabel(project: Project) {
+  return hoursCaption(project.scheduledHours, project.budgetHours)
+}
+
 function ProjectBlock({
   project,
   open,
   onToggle,
+  zoom,
   columns,
+  viewWindow,
   assignments: rows,
   canBulk,
-  overlays,
+  selectedKeys,
   onBarClick,
 }: {
   project: Project
   open: boolean
   onToggle: () => void
+  zoom: Zoom
   columns: ReturnType<typeof getColumns>
+  viewWindow: TimeWindow
   assignments: Assignment[]
   canBulk: boolean
-  overlays: { key: string; left: string; width: string }[]
-  onBarClick: (projectId: string, item: { start: string; end: string }) => void
+  selectedKeys: Set<string>
+  onBarClick: (id: string) => void
 }) {
   const projectPhases = phases.filter((p) => p.projectId === project.id)
   const techs = [...new Set(rows.filter((r) => r.personId !== 'unassigned').map((r) => r.personId))]
-  const sparkline = packLanes(projectPhases)
+  const sparkline = packLanes(projectPhases, viewWindow)
   const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
+  const phaseHint = projectPhases
+    .map((phase) => {
+      const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
+      return cap ? `${phase.name} · ${cap}` : phase.name
+    })
+    .join(' · ')
+  const projectName = project.name.replace(' Tentative', '')
 
   return (
     <>
@@ -425,8 +543,20 @@ function ProjectBlock({
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
-          <Flex direction="column">
-            <Text>{project.name.replace(' Tentative', '')}</Text>
+          <Flex direction="column" className="rc-gutter-copy">
+            <Flex alignItems="center" gap="2">
+              {!open && phaseHint ? (
+                <Tooltip openOnHover>
+                  <Tooltip.Trigger>
+                    <Text>{projectName}</Text>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content>{phaseHint}</Tooltip.Content>
+                </Tooltip>
+              ) : (
+                <Text>{projectName}</Text>
+              )}
+              {project.tentative ? <Chip size="small" label="Tentative" color="#ffbe00" /> : null}
+            </Flex>
             <HoursReadout
               scheduled={project.scheduledHours}
               budget={project.budgetHours}
@@ -434,51 +564,55 @@ function ProjectBlock({
               fallback={open ? project.hours : project.collapsedHours}
             />
           </Flex>
-          {project.tentative ? <Chip size="small" label="Tentative" color="#ffbe00" /> : null}
         </div>
-        <Timeline columns={columns} overlays={overlays} packed={projectPhases.length > 0 ? sparkline : undefined} thin>
+        <Timeline columns={columns} packed={projectPhases.length > 0 ? sparkline : undefined} thin={!open}>
           {project.leftover ? null : projectPhases.length > 0 ? (
-            projectPhases.map((phase) => (
-              <Bar
-                key={phase.id}
-                start={phase.start}
-                end={phase.end}
-                columns={columns}
-                color={phase.color}
-                thin
-                canBulk={canBulk}
-                lane={sparkline.laneById.get(phase.id) ?? 0}
-                onClick={() => onBarClick(project.id, phase)}
-              />
-            ))
+            projectPhases.map((phase) => {
+              const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
+              const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
+              return (
+                <Bar
+                  key={phase.id}
+                  start={phase.start}
+                  end={phase.end}
+                  zoom={zoom}
+                  columns={columns}
+                  color={phase.color}
+                  label={open ? (cap ? `${phase.name} · ${cap}` : phase.name) : undefined}
+                  thin={!open}
+                  canBulk={canBulk}
+                  selected={isBarSelected(phase.id, selectedKeys)}
+                  lane={sparkline.laneById.get(phase.id) ?? 0}
+                  onClick={() => onBarClick(phase.id)}
+                  hint={`${phase.name} · ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual${over ? ' · over budget' : ''}`}
+                />
+              )
+            })
           ) : (
             <Bar
               start={project.start}
               end={project.end}
+              zoom={zoom}
               columns={columns}
               color={project.color}
-              thin
+              label={open ? durationBarLabel(project) : undefined}
+              thin={!open}
               canBulk={canBulk}
-              onClick={() => onBarClick(project.id, project)}
+              selected={isBarSelected(`proj-${project.id}`, selectedKeys)}
+              onClick={() => onBarClick(`proj-${project.id}`)}
             />
           )}
         </Timeline>
       </div>
-      {open && !project.leftover && projectPhases.length > 0 ? (
-        <PhaseRow
-          projectId={project.id}
-          projectPhases={projectPhases}
-          columns={columns}
-          canBulk={canBulk}
-          onBarClick={onBarClick}
-        />
-      ) : null}
       {open && !project.leftover ? (
         <UnassignedRow
           projectId={project.id}
+          zoom={zoom}
+          viewWindow={viewWindow}
           rows={rows.filter((r) => r.kind === 'unassigned')}
           columns={columns}
           canBulk={canBulk}
+          selectedKeys={selectedKeys}
           onBarClick={onBarClick}
         />
       ) : null}
@@ -488,9 +622,12 @@ function ProjectBlock({
               key={`${project.id}-${personId}`}
               personId={personId}
               projectId={project.id}
+              zoom={zoom}
+              viewWindow={viewWindow}
               rows={rows.filter((r) => r.personId === personId)}
               columns={columns}
               canBulk={canBulk}
+              selectedKeys={selectedKeys}
               onBarClick={onBarClick}
             />
           ))
@@ -521,25 +658,31 @@ function PersonBlock({
   personId,
   open,
   onToggle,
+  zoom,
   columns,
+  viewWindow,
   assignments: rows,
   canBulk,
+  selectedKeys,
   onBarClick,
 }: {
   personId: string
   open: boolean
   onToggle: () => void
+  zoom: Zoom
   columns: ReturnType<typeof getColumns>
+  viewWindow: TimeWindow
   assignments: Assignment[]
   canBulk: boolean
-  onBarClick: (projectId: string, item: { start: string; end: string }) => void
+  selectedKeys: Set<string>
+  onBarClick: (id: string) => void
 }) {
   const person = personId === 'unassigned' ? undefined : personById(personId)
   const meta = personId === 'unassigned' ? { text: 'No technician · 40h on Summit', danger: false } : personMeta(personId)
   const grouped = projects
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
     .map((p) => ({ project: p, rows: rows.filter((r) => r.projectId === p.id) }))
-  const packed = packLanes(rows)
+  const packed = packLanes(rows, viewWindow)
 
   return (
     <>
@@ -549,7 +692,7 @@ function PersonBlock({
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
           {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
-          <Flex direction="column">
+          <Flex direction="column" className="rc-gutter-copy">
             <Text>{person?.name ?? 'Unassigned'}</Text>
             {meta.danger && 'detail' in meta && meta.detail ? (
               <Tooltip openOnHover>
@@ -573,101 +716,58 @@ function PersonBlock({
               key={row.id}
               start={row.start}
               end={row.end}
+              zoom={zoom}
               columns={columns}
-              color={projectById(row.projectId)?.color ?? '#8b8b8b'}
-              label={open ? undefined : row.label}
+              color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
+              label={open ? undefined : zoomBarLabel(zoom, row)}
               thin={open}
               confirmed={row.confirmed}
               unassigned={row.kind === 'unassigned'}
               canBulk={canBulk}
+              selected={isBarSelected(row.id, selectedKeys)}
               lane={packed.laneById.get(row.id) ?? 0}
-              onClick={() => onBarClick(row.projectId, row)}
+              onClick={() => onBarClick(row.id)}
             />
           ))}
         </Timeline>
       </div>
       {open
-        ? grouped.map(({ project, rows: projectRows }) => (
-            <div className="rc-row rc-nested" key={project.id}>
+        ? grouped.map(({ project, rows: projectRows }) => {
+            const nested = packLanes(projectRows, viewWindow)
+            return (
+            <div className={`rc-row rc-nested${nested.laneCount > 1 ? ' is-stacked' : ''}`} key={project.id}>
               <div className="rc-gutter">
-                <Flex direction="column">
+                <Flex direction="column" className="rc-gutter-copy">
                   <Text>{project.name.replace(' Tentative', '')}</Text>
                   <Text size="small" subdued>
                     {projectRows.map((r) => r.label).join(' + ')}
                   </Text>
                 </Flex>
               </div>
-              <Timeline columns={columns} packed={packLanes(projectRows)}>
+              <Timeline columns={columns} packed={nested}>
                 {projectRows.map((row) => (
                   <Bar
                     key={row.id}
                     start={row.start}
                     end={row.end}
+                    zoom={zoom}
                     columns={columns}
-                    color={project.color}
-                    label={row.label}
+                    color={assignmentColor(row, project.color)}
+                    label={zoomBarLabel(zoom, row)}
                     confirmed={row.confirmed}
                     unassigned={row.kind === 'unassigned'}
                     canBulk={canBulk}
-                    lane={packLanes(projectRows).laneById.get(row.id) ?? 0}
-                    onClick={() => onBarClick(project.id, row)}
+                    selected={isBarSelected(row.id, selectedKeys)}
+                    lane={nested.laneById.get(row.id) ?? 0}
+                    onClick={() => onBarClick(row.id)}
                   />
                 ))}
               </Timeline>
             </div>
-          ))
+            )
+          })
         : null}
     </>
-  )
-}
-
-function PhaseRow({
-  projectId,
-  projectPhases,
-  columns,
-  canBulk,
-  onBarClick,
-}: {
-  projectId: string
-  projectPhases: Phase[]
-  columns: ReturnType<typeof getColumns>
-  canBulk: boolean
-  onBarClick: (projectId: string, item: { start: string; end: string }) => void
-}) {
-  const packed = packLanes(projectPhases)
-  return (
-    <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
-      <div className="rc-gutter">
-        <Flex direction="column">
-          <Text size="small" subdued>
-            Phases
-          </Text>
-          <Text size="small" subdued>
-            Scheduled / budget
-          </Text>
-        </Flex>
-      </div>
-      <Timeline columns={columns} packed={packed}>
-        {projectPhases.map((phase) => {
-          const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
-          const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
-          return (
-            <Bar
-              key={phase.id}
-              start={phase.start}
-              end={phase.end}
-              columns={columns}
-              color={phase.color}
-              label={cap ? `${phase.name} · ${cap}` : phase.name}
-              canBulk={canBulk}
-              lane={packed.laneById.get(phase.id) ?? 0}
-              onClick={() => onBarClick(projectId, phase)}
-              hint={`${phase.name} · ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual${over ? ' · over budget' : ''}`}
-            />
-          )
-        })}
-      </Timeline>
-    </div>
   )
 }
 
@@ -675,31 +775,32 @@ function assignmentColor(row: Assignment, fallback: string) {
   return phaseById(row.phaseId)?.color ?? fallback
 }
 
-function assignmentLabel(row: Assignment) {
-  const phase = phaseById(row.phaseId)
-  return phase ? `${phase.name} · ${row.label}` : row.label
-}
-
 function UnassignedRow({
   projectId,
+  zoom,
+  viewWindow,
   rows,
   columns,
   canBulk,
+  selectedKeys,
   onBarClick,
 }: {
   projectId: string
+  zoom: Zoom
+  viewWindow: TimeWindow
   rows: Assignment[]
   columns: ReturnType<typeof getColumns>
   canBulk: boolean
-  onBarClick: (projectId: string, item: { start: string; end: string }) => void
+  selectedKeys: Set<string>
+  onBarClick: (id: string) => void
 }) {
-  const packed = packLanes(rows)
+  const packed = packLanes(rows, viewWindow)
   if (rows.length === 0) return null
   return (
     <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
       <div className="rc-gutter">
         <Avatar name="Unassigned" size="small" />
-        <Flex direction="column">
+        <Flex direction="column" className="rc-gutter-copy">
           <Text>Unassigned</Text>
           <Text size="small" subdued>
             No technician · {rows.map((r) => r.label).join(' + ')}
@@ -712,13 +813,15 @@ function UnassignedRow({
             key={row.id}
             start={row.start}
             end={row.end}
+            zoom={zoom}
             columns={columns}
             color={assignmentColor(row, '#e8e8e8')}
-            label={assignmentLabel(row)}
+            label={zoomBarLabel(zoom, row)}
             unassigned
             canBulk={canBulk}
+            selected={isBarSelected(row.id, selectedKeys)}
             lane={packed.laneById.get(row.id) ?? 0}
-            onClick={() => onBarClick(projectId, row)}
+            onClick={() => onBarClick(row.id)}
           />
         ))}
       </Timeline>
@@ -729,27 +832,33 @@ function UnassignedRow({
 function PersonAssignmentRow({
   personId,
   projectId,
+  zoom,
+  viewWindow,
   rows,
   columns,
   canBulk,
+  selectedKeys,
   onBarClick,
 }: {
   personId: string
   projectId: string
+  zoom: Zoom
+  viewWindow: TimeWindow
   rows: Assignment[]
   columns: ReturnType<typeof getColumns>
   canBulk: boolean
-  onBarClick: (projectId: string, item: { start: string; end: string }) => void
+  selectedKeys: Set<string>
+  onBarClick: (id: string) => void
 }) {
   const person = personById(personId)
   const meta = personMeta(personId)
-  const packed = packLanes(rows)
+  const packed = packLanes(rows, viewWindow)
   if (!person) return null
   return (
     <div className={`rc-row rc-nested ${meta.danger ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
       <div className="rc-gutter">
         <Avatar name={person.name} size="small" color={person.color} />
-        <Flex direction="column">
+        <Flex direction="column" className="rc-gutter-copy">
           <Text>{person.name}</Text>
           {meta.danger ? (
             <Tooltip openOnHover>
@@ -773,13 +882,15 @@ function PersonAssignmentRow({
             key={row.id}
             start={row.start}
             end={row.end}
+            zoom={zoom}
             columns={columns}
             color={assignmentColor(row, projectById(projectId)?.color ?? person.color)}
-            label={assignmentLabel(row)}
+            label={zoomBarLabel(zoom, row)}
             confirmed={row.confirmed}
             canBulk={canBulk}
+            selected={isBarSelected(row.id, selectedKeys)}
             lane={packed.laneById.get(row.id) ?? 0}
-            onClick={() => onBarClick(projectId, row)}
+            onClick={() => onBarClick(row.id)}
           />
         ))}
       </Timeline>
@@ -789,28 +900,23 @@ function PersonAssignmentRow({
 
 function Timeline({
   columns,
-  overlays = [],
   packed,
   thin,
   children,
 }: {
   columns: ReturnType<typeof getColumns>
-  overlays?: { key: string; left: string; width: string }[]
   packed?: { laneCount: number }
   thin?: boolean
   children?: ReactNode
 }) {
   const style = {
-    gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))`,
-    '--rc-lanes': packed?.laneCount ?? 1,
+    ['--rc-lanes' as string]: String(packed?.laneCount ?? 1),
+    ['--rc-cols' as string]: String(columns.length),
   } as CSSProperties
   return (
-    <div className={`rc-timeline${thin ? ' is-thin' : ''}`} style={style}>
+    <div className={`rc-timeline${thin ? ' is-thin' : ''}${(packed?.laneCount ?? 1) <= 1 ? ' is-single' : ''}`} style={style}>
       {columns.map((col) => (
-        <div className="rc-cell" key={col.id} />
-      ))}
-      {overlays.map((o) => (
-        <div className="rc-overlay" key={o.key} style={{ left: o.left, width: o.width }} onClick={(event) => event.stopPropagation()} />
+        <div className={`rc-cell${col.weekend ? ' is-weekend' : ''}${col.today ? ' is-today' : ''}`} key={col.id} />
       ))}
       {children}
     </div>
@@ -821,12 +927,14 @@ function Bar({
   start,
   end,
   columns,
+  zoom,
   color,
   label,
   thin,
   confirmed,
   unassigned,
   canBulk,
+  selected,
   lane = 0,
   hint,
   onClick,
@@ -834,12 +942,14 @@ function Bar({
   start: string
   end: string
   columns: ReturnType<typeof getColumns>
+  zoom: Zoom
   color: string
   label?: string
   thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
   canBulk: boolean
+  selected?: boolean
   lane?: number
   hint?: string
   onClick: () => void
@@ -851,7 +961,7 @@ function Bar({
   return (
     <button
       type="button"
-      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${canBulk ? '' : ' is-disabled'}`}
+      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${canBulk ? '' : ' is-disabled'}`}
       style={
         {
           left: `calc(${style.left} + 3px)`,
@@ -868,8 +978,8 @@ function Bar({
         onClick()
       }}
     >
-      {confirmed && !thin ? <Icon svg={CheckIcon} size="small" inherit /> : null}
-      {!thin && label ? label : null}
+      {(confirmed || selected) && !thin ? <Icon svg={CheckIcon} size="small" inherit /> : null}
+      {!thin && label ? <span className="rc-bar-label">{label}</span> : null}
     </button>
   )
 }
