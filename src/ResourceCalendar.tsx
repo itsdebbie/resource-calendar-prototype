@@ -483,6 +483,7 @@ export function ResourceCalendar() {
                 <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
                   <Tooltip.Trigger
                     onPointerDown={() => setZoomTipOpen(false)}
+                    onClick={() => setZoomTipOpen(false)}
                     onMouseLeave={() => setZoomTipOpen(undefined)}
                   >
                     <SegmentedControl
