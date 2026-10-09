@@ -64,6 +64,7 @@ import {
   segmentIsSliver,
   shiftSpan,
   todayDayNumber,
+  todayMarkerX,
   worldXForDate,
   yearBands,
   zoomStep,
@@ -724,7 +725,7 @@ function TimelineHeader({
   weekGuideDay?: string
 }) {
   const minIndex = columns[0]?.index ?? 0
-  const todayX = worldXForDate(zoom, minIndex, colW, DEMO_TODAY)
+  const todayX = todayMarkerX(zoom, minIndex, colW)
   const showMonthBand = zoom === 'days' || zoom === 'weeks'
   const bands = showMonthBand ? monthBands(columns) : yearBands(columns)
   const pinCol = visColumns.find((col) => col.index >= firstVisible) ?? visColumns[0]
@@ -765,7 +766,13 @@ function TimelineHeader({
                 <Text size="small" subdued>
                   {col.sublabel}
                 </Text>
-                {col.today ? <span className="rc-today-pill">{col.label}</span> : <Text size="small">{col.label}</Text>}
+                {col.today ? (
+                  <span className="rc-today-slot" aria-hidden>
+                    {col.label}
+                  </span>
+                ) : (
+                  <Text size="small">{col.label}</Text>
+                )}
               </>
             ) : (
               <>
@@ -779,7 +786,7 @@ function TimelineHeader({
             )}
           </div>
         ))}
-        {zoom === 'weeks' ? (
+        {zoom === 'days' || zoom === 'weeks' ? (
           <span className="rc-today-pill rc-today-mark" style={{ left: todayX }}>
             {todayDayNumber()}
           </span>
@@ -1121,7 +1128,7 @@ function PersonAssignmentRow({
 function Timeline({ children }: { children?: ReactNode }) {
   const { columns, visColumns, colW, zoom, weekGuideDay } = useGantt()
   const minIndex = columns[0]?.index ?? 0
-  const todayX = worldXForDate(zoom, minIndex, colW, DEMO_TODAY)
+  const todayX = todayMarkerX(zoom, minIndex, colW)
   const style = {
     ['--rc-cols' as string]: String(columns.length),
     ['--rc-col-w' as string]: `${colW}px`,

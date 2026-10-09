@@ -441,6 +441,12 @@ export function isDayZoom(zoom: Zoom) {
   return zoom === 'days'
 }
 
+/** Pixel x for the today guide. Day view is centered in the column so it does not read as a grid line. */
+export function todayMarkerX(zoom: Zoom, extentMin: number, colW: number) {
+  const x = worldXForDate(zoom, extentMin, colW, DEMO_TODAY)
+  return zoom === 'days' ? x + colW / 2 : x
+}
+
 export function isEditableZoom(zoom: Zoom) {
   return zoom === 'days' || zoom === 'weeks'
 }

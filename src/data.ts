@@ -293,6 +293,14 @@ export const assignments: Assignment[] = [
     end: '2026-04-24',
     confirmed: true,
   },
+  {
+    id: 'danny-apex',
+    projectId: 'apex',
+    personId: 'danny',
+    label: '40h',
+    start: '2026-03-09',
+    end: '2026-03-20',
+  },
 ]
 
 export function personById(id: string) {
@@ -357,7 +365,12 @@ export function assignmentWorkdaysInWindow(row: Assignment, window: { start: num
   return n
 }
 
-export function personHoursInWindow(personId: string, rows: Assignment[], window: { start: number; end: number }) {
+export function personHoursInWindow(
+  personId: string,
+  rows: Assignment[],
+  window: { start: number; end: number },
+  rangeLabel?: string,
+) {
   const mine = rows.filter((row) => row.personId === personId)
   const booked = mine.reduce((sum, row) => sum + hoursPerWorkday(row) * assignmentWorkdaysInWindow(row, window), 0)
   const days = workdaysInWindow(window)
@@ -371,16 +384,58 @@ export function personHoursInWindow(personId: string, rows: Assignment[], window
       const name = row.title ?? phaseById(row.phaseId)?.name
       return [name, row.label, project].filter(Boolean).join(' ')
     })
+  const breakdown = `${bookedR}h scheduled in the visible dates / ${capR}h capacity (${days} workdays × 8h)${names.length ? ` · ${names.join(' + ')}` : ''}`
   return {
     booked: bookedR,
     cap: capR,
     over: capR > 0 && bookedR > capR,
     text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h in view`,
-    detail:
-      personId === 'unassigned'
-        ? names.join(' + ')
-        : `${bookedR}h scheduled in the visible dates / ${capR}h capacity (${days} workdays × 8h)${names.length ? ` · ${names.join(' + ')}` : ''}`,
+    detail: personId === 'unassigned' ? names.join(' + ') : [rangeLabel, breakdown].filter(Boolean).join('\n'),
   }
+}
+
+/** Daily capacity is 8h (40h week / 5). Over-capacity days, not mere overlaps, are conflicts. */
+export function overCapacityAssignmentIds(personId: string, rows: Assignment[]) {
+  const cap = weeklyCap(personId) / 5
+  const ids = new Set<string>()
+  if (cap <= 0) return ids
+  const dayHours = new Map<string, number>()
+  for (const row of rows) {
+    const h = hoursPerWorkday(row)
+    const off = new Set(row.offDays)
+    const end = Date.parse(`${row.end}T00:00:00Z`)
+    for (let t = Date.parse(`${row.start}T00:00:00Z`); t <= end; t += 86400000) {
+      const day = new Date(t).getUTCDay()
+      if (day === 0 || day === 6) continue
+      const iso = isoFromTs(t)
+      if (off.has(iso)) continue
+      dayHours.set(iso, (dayHours.get(iso) ?? 0) + h)
+    }
+  }
+  for (const row of rows) {
+    const off = new Set(row.offDays)
+    const end = Date.parse(`${row.end}T00:00:00Z`)
+    for (let t = Date.parse(`${row.start}T00:00:00Z`); t <= end; t += 86400000) {
+      const day = new Date(t).getUTCDay()
+      if (day === 0 || day === 6) continue
+      const iso = isoFromTs(t)
+      if (off.has(iso)) continue
+      if ((dayHours.get(iso) ?? 0) > cap + 0.05) {
+        ids.add(row.id)
+        break
+      }
+    }
+  }
+  return ids
+}
+
+export function hoursTooltipLine(scheduled?: number, budget?: number, actual?: number, fallback?: string) {
+  const bits: string[] = []
+  if (scheduled != null && budget != null) bits.push(`${scheduled} / ${budget}h scheduled`)
+  else if (scheduled != null) bits.push(`${scheduled}h scheduled`)
+  else if (fallback) bits.push(fallback)
+  if (actual != null) bits.push(`${actual}h actual`)
+  return bits.join(' · ') || undefined
 }
 
 /** 20h bars are a half day; 40h is a full 9–5. */
@@ -388,11 +443,16 @@ export function clockLabel(row: { label: string }) {
   return row.label.startsWith('20') ? '9a–1p' : '9a–5p'
 }
 
-export function zoomBarLabel(zoom: Zoom, row: Assignment) {
+export function zoomBarParts(zoom: Zoom, row: Assignment) {
   const phase = phaseById(row.phaseId)
   const name = row.title ?? phase?.name
   const clock = clockLabel(row)
-  if (zoom === 'days') return name ? `${name} · ${clock}` : clock
-  if (zoom === 'weeks') return name ? `${name} · ${clock} · ${row.label}` : `${clock} · ${row.label}`
-  return name ? `${name} · ${row.label}` : row.label
+  if (zoom === 'days') return { name, hours: clock }
+  if (zoom === 'weeks') return { name, hours: `${clock} · ${row.label}` }
+  return { name, hours: row.label }
+}
+
+export function zoomBarLabel(zoom: Zoom, row: Assignment) {
+  const { name, hours } = zoomBarParts(zoom, row)
+  return [name, hours].filter(Boolean).join(' · ')
 }

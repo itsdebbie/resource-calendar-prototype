@@ -37,6 +37,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     end: columnAtIndex(zoom, todayIndex + 13).end,
   }))
   const [firstVisible, setFirstVisible] = useState(todayIndex)
+  const [scrollLeft, setScrollLeft] = useState(0)
   const [alignNonce, setAlignNonce] = useState(0)
 
   const extentRef = useRef(extent)
@@ -69,6 +70,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const start = columnAtIndex(z, i0).start
     const end = columnAtIndex(z, i1).end
     setFirstVisible((prev) => (prev === i0 ? prev : i0))
+    setScrollLeft((prev) => (Math.abs(prev - sl) < 0.5 ? prev : sl))
     setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
     if (readyRef.current && !pendingAlign.current) {
       anchorRef.current = { iso: isoFromTs(start), offsetPx: sl - (i0 - min) * width }
@@ -296,6 +298,8 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     extent,
     viewWindow,
     firstVisible,
+    scrollLeft,
+    viewportPx,
     visibleCount,
     contextLabel: contextLabel(zoom, viewWindow),
     dateAtClientX,
