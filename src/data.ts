@@ -6,6 +6,8 @@ export type Person = {
   name: string
   role: string
   color: string
+  /** Daily shift length in hours. Sample values for the prototype, not a live roster. */
+  shiftHours: number
   leftover?: boolean
 }
 
@@ -52,10 +54,10 @@ export type Assignment = {
 }
 
 export const people: Person[] = [
-  { id: 'david', name: 'David', role: 'Lead tech', color: '#0265dc' },
-  { id: 'danny', name: 'Danny', role: 'Installer', color: '#077e50' },
-  { id: 'kevin', name: 'Kevin', role: 'Installer', color: '#c98600' },
-  { id: 'chris', name: 'Chris', role: 'Available · 40h/w', color: '#6b5ce7', leftover: true },
+  { id: 'david', name: 'David', role: 'Lead tech', color: '#0265dc', shiftHours: 10 },
+  { id: 'danny', name: 'Danny', role: 'Installer', color: '#077e50', shiftHours: 8 },
+  { id: 'kevin', name: 'Kevin', role: 'Installer', color: '#c98600', shiftHours: 10 },
+  { id: 'chris', name: 'Chris', role: 'Available · 40h/w', color: '#6b5ce7', shiftHours: 8, leftover: true },
 ]
 
 export const projects: Project[] = [
@@ -325,9 +327,14 @@ export function hoursCaption(scheduled?: number, budget?: number) {
   return `${scheduled} / ${budget}h`
 }
 
-export function weeklyCap(personId: string) {
+/** Daily shift length. Sample `shiftHours` on each person; default 8 if omitted. */
+export function dailyShiftHours(personId: string) {
   if (personId === 'unassigned') return 0
-  return 40
+  return personById(personId)?.shiftHours ?? 8
+}
+
+export function weeklyCap(personId: string) {
+  return dailyShiftHours(personId) * 5
 }
 
 /** 40h labels are weekly; 8h (or anything ≤12) is treated as hours that day. */
@@ -374,7 +381,8 @@ export function personHoursInWindow(
   const mine = rows.filter((row) => row.personId === personId)
   const booked = mine.reduce((sum, row) => sum + hoursPerWorkday(row) * assignmentWorkdaysInWindow(row, window), 0)
   const days = workdaysInWindow(window)
-  const cap = personId === 'unassigned' ? 0 : (weeklyCap(personId) / 5) * days
+  const shift = dailyShiftHours(personId)
+  const cap = shift * days
   const bookedR = Math.round(booked)
   const capR = Math.round(cap)
   const names = mine
@@ -384,19 +392,19 @@ export function personHoursInWindow(
       const name = row.title ?? phaseById(row.phaseId)?.name
       return [name, row.label, project].filter(Boolean).join(' ')
     })
-  const breakdown = `${bookedR}h scheduled in the visible dates / ${capR}h capacity (${days} workdays × 8h)${names.length ? ` · ${names.join(' + ')}` : ''}`
+  const breakdown = `${bookedR}h scheduled in the visible dates / ${capR}h available (${days} workdays × ${shift}h)${names.length ? ` · ${names.join(' + ')}` : ''}`
   return {
     booked: bookedR,
     cap: capR,
     over: capR > 0 && bookedR > capR,
     text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h in view`,
-    detail: personId === 'unassigned' ? names.join(' + ') : [rangeLabel, breakdown].filter(Boolean).join('\n'),
+    detail: personId === 'unassigned' ? names.join(' + ') : [rangeLabel, `${shift}h shift`, breakdown].filter(Boolean).join('\n'),
   }
 }
 
-/** Daily capacity is 8h (40h week / 5). Over-capacity days, not mere overlaps, are conflicts. */
+/** Conflict when booked hours on a day exceed that person's shift length, not for every overlap. */
 export function overCapacityAssignmentIds(personId: string, rows: Assignment[]) {
-  const cap = weeklyCap(personId) / 5
+  const cap = dailyShiftHours(personId)
   const ids = new Set<string>()
   if (cap <= 0) return ids
   const dayHours = new Map<string, number>()

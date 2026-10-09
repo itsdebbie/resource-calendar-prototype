@@ -491,11 +491,16 @@ body.rc-grabbing {
 }
 
 .rc-bar-name {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+.rc-bar-label > svg,
+.rc-bar-label [data-anv='icon'] {
+  flex: none;
 }
 
 .rc-bar-hours {

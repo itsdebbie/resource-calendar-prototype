@@ -1320,13 +1320,14 @@ function BarSegment({
   const style = barStyle(seg.start, seg.end, columns)
   if (!style.visible) return null
   const sliver = segmentIsSliver(seg.start, seg.end, zoom)
-  const minIndex = columns[0]?.index ?? 0
-  const leftPx = worldXForDate(zoom, minIndex, colW, seg.start) + 3
-  const rightPx = worldXForDate(zoom, minIndex, colW, addDays(seg.end, 1)) - 3
-  const widthPx = Math.max(4, rightPx - leftPx)
-  const clipped = leftPx < clipLeft && rightPx > clipLeft
-  const shift = clipped ? Math.min(Math.max(0, clipLeft - leftPx), Math.max(0, widthPx - 12)) : 0
-  const vis = Math.min(rightPx, clipLeft + viewPx) - Math.max(leftPx, clipLeft)
+  const timelineW = columns.length * colW
+  const leftPx = (Number.parseFloat(style.left) / 100) * timelineW + 3
+  const widthPx = Math.max(4, (Number.parseFloat(style.width) / 100) * timelineW - 6)
+  const rightPx = leftPx + widthPx
+  const viewLeft = clipLeft
+  const clipped = leftPx < viewLeft - 1 && rightPx > viewLeft
+  const shift = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
+  const vis = Math.min(rightPx, viewLeft + viewPx) - Math.max(leftPx, viewLeft)
   const showHours = Boolean(showLabel && hours) && vis > 96
   const dates = formatRange(seg.start, seg.end)
   const tooltip = [name, hoursLine, dates].filter(Boolean).join('\n')
@@ -1343,15 +1344,19 @@ function BarSegment({
     '--rc-label-shift': `${shift}px`,
   } as CSSProperties
 
+  const check =
+    (confirmed || selectedNow) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null
   const inner = (
     <>
-      {(confirmed || selectedNow) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null}
       {!thin && showLabel && (name || hours) && !sliver ? (
         <span className="rc-bar-label">
           {name ? <span className="rc-bar-name">{name}</span> : null}
           {showHours && hours ? <span className="rc-bar-hours">{hours}</span> : null}
+          {check}
         </span>
-      ) : null}
+      ) : (
+        check
+      )}
       {editable && wholeBar && !thin ? (
         <span
           className="rc-bar-handle"
