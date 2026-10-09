@@ -491,10 +491,10 @@ export function ResourceCalendar() {
                       selected={zoom}
                       onChange={(value) => changeZoom(value as Zoom)}
                     >
-                      <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
                       <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
                     </SegmentedControl>
                   </Tooltip.Trigger>
@@ -684,7 +684,7 @@ export function ResourceCalendar() {
           <Flex direction="column" gap="3">
             <Text subdued>
               {isDayZoom(zoom)
-                ? 'Hours apply to the selected day. Switch to Weeks to move or resize the whole bar.'
+                ? 'Hours apply to the selected day. Switch to Week to move or resize the whole bar.'
                 : 'Edits hours on the selected bar' + (selected.length === 1 ? '' : 's') + '. Month, Quarter, and Year are read-only.'}
             </Text>
             <TextField name="hours" label={isDayZoom(zoom) ? 'Hours this day' : 'Hours per day'} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
