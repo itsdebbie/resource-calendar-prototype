@@ -18,6 +18,7 @@ import {
   Dialog,
   Flex,
   Icon,
+  Popover,
   SearchField,
   SegmentedControl,
   Text,
@@ -29,6 +30,8 @@ import {
   assignments,
   hoursCaption,
   hoursOver,
+  hoursTooltipLine,
+  overCapacityAssignmentIds,
   people,
   personById,
   personHoursInWindow,
@@ -37,6 +40,7 @@ import {
   projectById,
   projects,
   zoomBarLabel,
+  zoomBarParts,
   type Assignment,
   type GroupBy,
   type Project,
@@ -45,6 +49,7 @@ import {
 import {
   DEMO_TODAY,
   GUTTER,
+  addDays,
   isIsoDate,
   isoFromTs,
   activeSegments,
@@ -59,6 +64,7 @@ import {
   isEditableZoom,
   monthBands,
   moveOneDay,
+  packLanes,
   periodPinLabel,
   resizeSpanEnd,
   segmentIsSliver,
@@ -112,6 +118,8 @@ type GanttCtx = {
   visColumns: Column[]
   colW: number
   viewWindow: TimeWindow
+  clipLeft: number
+  viewPx: number
   selectedKeys: Set<string>
   dragIds: Set<string>
   editable: boolean
@@ -119,6 +127,7 @@ type GanttCtx = {
   resolve: (id: string, start: string, end: string, offDays?: string[]) => Span
   onBarClick: (id: string, additive?: boolean) => void
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
+  onEditInWeek: (span: Span) => void
 }
 
 const GanttContext = createContext<GanttCtx | null>(null)
@@ -194,7 +203,7 @@ export function ResourceCalendar() {
   const editable = isEditableZoom(zoom)
 
   const timeline = useTimelineScroll(zoom, scrollRef)
-  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor } =
+  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
 
   const visColumns = useMemo(() => {
@@ -373,6 +382,7 @@ export function ResourceCalendar() {
   }, [dragIds, applyDrag])
 
   function onBarClick(id: string, additive = false) {
+    if (!editable) return
     if (ignoreClick.current) {
       ignoreClick.current = false
       return
@@ -441,12 +451,22 @@ export function ResourceCalendar() {
       ),
   )
 
+  const onEditInWeek = useCallback(
+    (span: Span) => {
+      const mid = addDays(span.start, Math.floor(diffDays(span.start, span.end) / 2))
+      changeZoom('weeks', mid, Math.round(viewportPx / 2))
+    },
+    [changeZoom, viewportPx],
+  )
+
   const gantt: GanttCtx = {
     zoom,
     columns,
     visColumns,
     colW,
     viewWindow,
+    clipLeft: scrollLeft,
+    viewPx: viewportPx,
     selectedKeys,
     dragIds,
     editable,
@@ -454,9 +474,9 @@ export function ResourceCalendar() {
     resolve,
     onBarClick,
     onBarPointerDown,
+    onEditInWeek,
   }
 
-  const hoursFor = formatWindowCaption(viewWindow)
   const [zoomTipOpen, setZoomTipOpen] = useState<boolean | undefined>(undefined)
   const zoomTip = useMemo(() => {
     const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
@@ -590,9 +610,6 @@ export function ResourceCalendar() {
                 <div className="rc-gutter-head">
                   <div className="rc-gutter-copy">
                     <Text>{groupBy === 'projects' ? 'Projects' : 'People'}</Text>
-                    <Text size="small" subdued>
-                      Hours for {hoursFor}
-                    </Text>
                   </div>
                 </div>
                 <TimelineHeader
@@ -636,7 +653,7 @@ export function ResourceCalendar() {
         </div>
       ) : null}
 
-      {selected.length > 0 ? (
+      {editable && selected.length > 0 ? (
         <div className="rc-bulk-bar">
           <div className="rc-bulk-bar-copy">
             <Text>
@@ -865,9 +882,12 @@ function ProjectBlock({
               id={`proj-${project.id}`}
               span={projectSpan}
               color={project.color}
-              label={durationBarLabel(project)}
+              name={projectName}
+              hours={durationBarLabel(project)}
+              scheduled={project.scheduledHours}
+              budget={project.budgetHours}
+              actual={project.actualHours}
               selected={selectedKeys.has(`proj-${project.id}`)}
-              hint={`${projectName} · whole-project ${hoursCaption(project.scheduledHours, project.budgetHours) ?? ''} · ${project.actualHours ?? 0} actual`}
             />
           )}
         </Timeline>
@@ -895,9 +915,12 @@ function ProjectBlock({
                     id={phase.id}
                     span={span}
                     color={phase.color}
-                    label={cap ? `${phase.name} · ${cap}` : phase.name}
+                    name={phase.name}
+                    hours={cap}
+                    scheduled={phase.scheduledHours}
+                    budget={phase.budgetHours}
+                    actual={phase.actualHours}
                     selected={selectedKeys.has(phase.id)}
-                    hint={`${phase.name} · whole-phase ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual`}
                   />
                 </Timeline>
               </div>
@@ -943,7 +966,8 @@ function PersonBlock({
   onToggle: () => void
   assignments: Assignment[]
 }) {
-  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
+  const { viewWindow, resolve, zoom } = useGantt()
+  const rangeLabel = formatWindowCaption(viewWindow)
   const person = personId === 'unassigned' ? undefined : personById(personId)
   const meta =
     personId === 'unassigned'
@@ -952,15 +976,15 @@ function PersonBlock({
           personId,
           assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
           viewWindow,
+          rangeLabel,
         )
   const grouped = projects
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
     .map((p) => ({ project: p, rows: rows.filter((r) => r.projectId === p.id) }))
-  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
 
   return (
     <>
-      <div className={`rc-row is-group ${meta.over ? 'is-over' : ''}`}>
+      <div className={`rc-row is-group is-packed${meta.over ? ' is-capacity' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
@@ -968,23 +992,10 @@ function PersonBlock({
           {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
           <div className="rc-gutter-copy">
             <Text>{person?.name ?? 'Unassigned'}</Text>
-            <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
+            <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
           </div>
         </div>
-        <Timeline>
-          {resolvedRows.map((row) => (
-            <SpanBar
-              key={row.id}
-              id={row.id}
-              span={row}
-              color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
-              label={open ? undefined : zoomBarLabel(zoom, row)}
-              confirmed={row.confirmed}
-              unassigned={row.kind === 'unassigned'}
-              selected={selectedKeys.has(row.id)}
-            />
-          ))}
-        </Timeline>
+        <PackedPersonBars rows={rows} personId={personId} showLabels={!open} />
       </div>
       {open
         ? grouped.map(({ project, rows: projectRows }) =>
@@ -1001,15 +1012,7 @@ function PersonBlock({
                     </div>
                   </div>
                   <Timeline>
-                    <SpanBar
-                      id={row.id}
-                      span={span}
-                      color={assignmentColor(row, project.color)}
-                      label={zoomBarLabel(zoom, row)}
-                      confirmed={row.confirmed}
-                      unassigned={row.kind === 'unassigned'}
-                      selected={selectedKeys.has(row.id)}
-                    />
+                    <AssignmentBar row={{ ...row, ...span }} showLabel />
                   </Timeline>
                 </div>
               )
@@ -1020,23 +1023,11 @@ function PersonBlock({
   )
 }
 
-function HoursMeta({ text, detail, danger }: { text: string; detail?: string; danger?: boolean }) {
-  if (danger && detail) {
-    return (
-      <Tooltip openOnHover>
-        <Tooltip.Trigger>
-          <Text size="small" className="a2-c-danger">
-            {text}
-          </Text>
-        </Tooltip.Trigger>
-        <Tooltip.Content>{detail}</Tooltip.Content>
-      </Tooltip>
-    )
-  }
+function HoursMeta({ text, detail, warn }: { text: string; detail?: string; warn?: boolean }) {
   return (
     <Tooltip openOnHover>
       <Tooltip.Trigger>
-        <Text size="small" className={danger ? 'a2-c-danger' : undefined} subdued={!danger}>
+        <Text size="small" className={warn ? 'rc-hours-warn' : undefined} subdued={!warn}>
           {text}
         </Text>
       </Tooltip.Trigger>
@@ -1050,11 +1041,9 @@ function assignmentColor(row: Assignment, fallback: string) {
 }
 
 function UnassignedRow({ rows }: { rows: Assignment[] }) {
-  const { zoom, resolve, selectedKeys } = useGantt()
-  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
   if (rows.length === 0) return null
   return (
-    <div className="rc-row rc-nested">
+    <div className="rc-row rc-nested is-packed">
       <div className="rc-gutter">
         <Avatar name="Unassigned" size="small" />
         <div className="rc-gutter-copy">
@@ -1064,77 +1053,119 @@ function UnassignedRow({ rows }: { rows: Assignment[] }) {
           </Text>
         </div>
       </div>
-      <Timeline>
-        {resolvedRows.map((row) => (
-          <SpanBar
-            key={row.id}
-            id={row.id}
-            span={row}
-            color={assignmentColor(row, '#e8e8e8')}
-            label={zoomBarLabel(zoom, row)}
-            unassigned
-            selected={selectedKeys.has(row.id)}
-          />
-        ))}
-      </Timeline>
+      <PackedPersonBars rows={rows} personId="unassigned" showLabels />
     </div>
   )
 }
 
 function PersonAssignmentRow({
   personId,
-  projectId,
   rows,
 }: {
   personId: string
   projectId: string
   rows: Assignment[]
 }) {
-  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
+  const { viewWindow, resolve } = useGantt()
   const person = personById(personId)
   const meta = personHoursInWindow(
     personId,
     assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
     viewWindow,
+    formatWindowCaption(viewWindow),
   )
-  const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
   if (!person) return null
   return (
-    <div className={`rc-row rc-nested ${meta.over ? 'is-over' : ''}`}>
+    <div className={`rc-row rc-nested is-packed${meta.over ? ' is-capacity' : ''}`}>
       <div className="rc-gutter">
         <Avatar name={person.name} size="small" color={person.color} />
         <div className="rc-gutter-copy">
           <Text>{person.name}</Text>
-          <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
+          <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
         </div>
       </div>
-      <Timeline>
-        {resolvedRows.map((row) => (
-          <SpanBar
-            key={row.id}
-            id={row.id}
-            span={row}
-            color={assignmentColor(row, projectById(projectId)?.color ?? person.color)}
-            label={zoomBarLabel(zoom, row)}
-            confirmed={row.confirmed}
-            selected={selectedKeys.has(row.id)}
-          />
-        ))}
-      </Timeline>
+      <PackedPersonBars rows={rows} personId={personId} showLabels />
     </div>
   )
 }
 
-function Timeline({ children }: { children?: ReactNode }) {
+function PackedPersonBars({
+  rows,
+  personId,
+  showLabels,
+}: {
+  rows: Assignment[]
+  personId: string
+  showLabels: boolean
+}) {
+  const { resolve } = useGantt()
+  const resolved = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+  const { laneById, laneCount } = packLanes(resolved)
+  const allForPerson = assignments
+    .filter((row) => row.personId === personId)
+    .map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
+  const conflictIds = overCapacityAssignmentIds(personId, allForPerson)
+  return (
+    <Timeline packed lanes={laneCount}>
+      {resolved.map((row) => (
+        <AssignmentBar
+          key={row.id}
+          row={row}
+          showLabel={showLabels}
+          lane={laneById.get(row.id) ?? 0}
+          conflict={conflictIds.has(row.id)}
+        />
+      ))}
+    </Timeline>
+  )
+}
+
+function AssignmentBar({
+  row,
+  showLabel,
+  lane = 0,
+  conflict,
+}: {
+  row: Assignment & Span
+  showLabel?: boolean
+  lane?: number
+  conflict?: boolean
+}) {
+  const { zoom, selectedKeys } = useGantt()
+  const parts = zoomBarParts(zoom, row)
+  const phase = phaseById(row.phaseId)
+  return (
+    <SpanBar
+      id={row.id}
+      span={row}
+      color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
+      name={parts.name}
+      hours={parts.hours}
+      showLabel={showLabel}
+      scheduled={phase?.scheduledHours}
+      budget={phase?.budgetHours}
+      actual={phase?.actualHours}
+      fallbackHours={row.label}
+      confirmed={row.confirmed}
+      unassigned={row.kind === 'unassigned'}
+      selected={selectedKeys.has(row.id)}
+      lane={lane}
+      conflict={conflict}
+    />
+  )
+}
+
+function Timeline({ children, packed, lanes = 1 }: { children?: ReactNode; packed?: boolean; lanes?: number }) {
   const { columns, visColumns, colW, zoom, weekGuideDay } = useGantt()
   const minIndex = columns[0]?.index ?? 0
   const todayX = todayMarkerX(zoom, minIndex, colW)
   const style = {
     ['--rc-cols' as string]: String(columns.length),
     ['--rc-col-w' as string]: `${colW}px`,
+    ['--rc-lanes' as string]: String(Math.max(1, lanes)),
   } as CSSProperties
   return (
-    <div className="rc-timeline" style={style}>
+    <div className={`rc-timeline${packed ? ' is-packed' : ''}`} style={style}>
       {visColumns.map((col) => (
         <div
           className={`rc-cell${col.weekend ? ' is-weekend' : ''}`}
@@ -1161,28 +1192,41 @@ function SpanBar({
   id,
   span,
   color,
-  label,
+  name,
+  hours,
+  scheduled,
+  budget,
+  actual,
+  fallbackHours,
   thin,
   confirmed,
   unassigned,
   selected,
   lane = 0,
-  hint,
+  conflict,
+  showLabel = true,
 }: {
   id: string
   span: Span
   color: string
-  label?: string
+  name?: string
+  hours?: string
+  scheduled?: number
+  budget?: number
+  actual?: number
+  fallbackHours?: string
   thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
   selected?: boolean
   lane?: number
-  hint?: string
+  conflict?: boolean
+  showLabel?: boolean
 }) {
   const { zoom, columns, dragIds, editable, onBarClick, onBarPointerDown } = useGantt()
   const segs = activeSegments(span.start, span.end, span.offDays)
   const wholeBar = zoom === 'weeks'
+  const hoursLine = hoursTooltipLine(scheduled, budget, actual, fallbackHours ?? hours)
   return (
     <>
       {segs.map((seg) => (
@@ -1192,13 +1236,16 @@ function SpanBar({
           span={span}
           seg={seg}
           color={color}
-          label={label}
+          name={name}
+          hours={hours}
+          hoursLine={hoursLine}
           thin={thin}
           confirmed={confirmed}
           unassigned={unassigned}
           selected={selected}
           lane={lane}
-          hint={hint}
+          conflict={conflict}
+          showLabel={showLabel}
           columns={columns}
           zoom={zoom}
           wholeBar={wholeBar}
@@ -1217,13 +1264,16 @@ function BarSegment({
   span,
   seg,
   color,
-  label,
+  name,
+  hours,
+  hoursLine,
   thin,
   confirmed,
   unassigned,
   selected,
   lane,
-  hint,
+  conflict,
+  showLabel,
   columns,
   zoom,
   wholeBar,
@@ -1236,13 +1286,16 @@ function BarSegment({
   span: Span
   seg: { start: string; end: string }
   color: string
-  label?: string
+  name?: string
+  hours?: string
+  hoursLine?: string
   thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
   selected?: boolean
   lane: number
-  hint?: string
+  conflict?: boolean
+  showLabel: boolean
   columns: Column[]
   zoom: Zoom
   wholeBar: boolean
@@ -1251,47 +1304,43 @@ function BarSegment({
   onBarClick: (id: string, additive?: boolean) => void
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
 }) {
+  const { clipLeft, viewPx, colW, onEditInWeek } = useGantt()
   const style = barStyle(seg.start, seg.end, columns)
   if (!style.visible) return null
   const sliver = segmentIsSliver(seg.start, seg.end, zoom)
-  const title = hint ?? `${label ?? ''} ${formatRange(seg.start, seg.end)}`.trim()
-  const tooltip = sliver
-    ? `${label ? `${label} · ` : ''}${formatRange(seg.start, seg.end)}${seg.start === seg.end ? ' · 1 day' : ''}`
-    : title
+  const minIndex = columns[0]?.index ?? 0
+  const leftPx = worldXForDate(zoom, minIndex, colW, seg.start) + 3
+  const rightPx = worldXForDate(zoom, minIndex, colW, addDays(seg.end, 1)) - 3
+  const widthPx = Math.max(4, rightPx - leftPx)
+  const pad = 8
+  const clipped = leftPx < clipLeft + pad && rightPx > clipLeft
+  const shift = clipped ? Math.min(Math.max(0, clipLeft + pad - leftPx), Math.max(0, widthPx - 12)) : 0
+  const vis = Math.min(rightPx, clipLeft + viewPx) - Math.max(leftPx, clipLeft)
+  const showHours = Boolean(showLabel && hours) && vis - (clipped ? pad : 0) > 96
+  const dates = formatRange(seg.start, seg.end)
+  const tooltip = [name, hoursLine, dates].filter(Boolean).join('\n')
+  const selectedNow = Boolean(selected && editable)
 
-  return (
-    <div
-      role="button"
-      tabIndex={-1}
-      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}`}
-      style={
-        {
-          left: `calc(${style.left} + 3px)`,
-          width: `calc(${style.width} - 6px)`,
-          background: unassigned ? undefined : color,
-          color: unassigned ? undefined : contrastText(color),
-          '--rc-lane': lane,
-          '--rc-bar-color': color,
-        } as CSSProperties
-      }
-      title={tooltip}
-      onClick={(event) => {
-        event.stopPropagation()
-        if (!dragging) onBarClick(id, event.shiftKey)
-      }}
-      onPointerDown={(event) => {
-        if (!editable || event.button !== 0) return
-        onBarPointerDown(event, id, span, wholeBar ? 'move' : 'day')
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault()
-          onBarClick(id)
-        }
-      }}
-    >
-      {(confirmed || selected) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null}
-      {!thin && label && !sliver ? <span className="rc-bar-label">{label}</span> : null}
+  const barClass = `rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selectedNow ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`
+  const barStyleVars = {
+    left: `calc(${style.left} + 3px)`,
+    width: `calc(${style.width} - 6px)`,
+    background: unassigned ? undefined : color,
+    color: unassigned ? undefined : contrastText(color),
+    '--rc-lane': lane,
+    '--rc-bar-color': color,
+    '--rc-label-shift': `${shift}px`,
+  } as CSSProperties
+
+  const inner = (
+    <>
+      {(confirmed || selectedNow) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null}
+      {!thin && showLabel && (name || hours) && !sliver ? (
+        <span className="rc-bar-label">
+          {name ? <span className="rc-bar-name">{name}</span> : null}
+          {showHours && hours ? <span className="rc-bar-hours">{hours}</span> : null}
+        </span>
+      ) : null}
       {editable && wholeBar && !thin ? (
         <span
           className="rc-bar-handle"
@@ -1301,7 +1350,82 @@ function BarSegment({
           }}
         />
       ) : null}
-    </div>
+    </>
+  )
+
+  if (!editable) {
+    return (
+      <Popover placement="top">
+        <Popover.Trigger>
+          {(props) => {
+            const { ref, onClick, ...rest } = props
+            return (
+            <Tooltip openOnHover delay={400} placement="top">
+              <Tooltip.Trigger>
+                <div
+                  {...rest}
+                  ref={ref as never}
+                  role="button"
+                  tabIndex={-1}
+                  className={barClass}
+                  style={barStyleVars}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onClick(event)
+                  }}
+                >
+                  {inner}
+                </div>
+              </Tooltip.Trigger>
+              <Tooltip.Content>{tooltip}</Tooltip.Content>
+            </Tooltip>
+            )
+          }}
+        </Popover.Trigger>
+        <Popover.Content>
+          <div className="rc-bar-pop">
+            {name ? <Text>{name}</Text> : null}
+            {hoursLine ? <Text size="small">{hoursLine}</Text> : null}
+            <Text size="small" subdued>
+              {dates}
+            </Text>
+            <Button size="small" onClick={() => onEditInWeek(span)}>
+              Edit in Week view
+            </Button>
+          </div>
+        </Popover.Content>
+      </Popover>
+    )
+  }
+
+  return (
+    <Tooltip openOnHover delay={400} placement="top">
+      <Tooltip.Trigger>
+        <div
+          role="button"
+          tabIndex={-1}
+          className={barClass}
+          style={barStyleVars}
+          onClick={(event) => {
+            event.stopPropagation()
+            if (!dragging) onBarClick(id, event.shiftKey)
+          }}
+          onPointerDown={(event) => {
+            if (!editable || event.button !== 0) return
+            onBarPointerDown(event, id, span, wholeBar ? 'move' : 'day')
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onBarClick(id)
+            }
+          }}
+        >
+          {inner}
+        </div>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{tooltip}</Tooltip.Content>
+    </Tooltip>
   )
 }
 

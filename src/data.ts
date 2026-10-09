@@ -445,7 +445,7 @@ export function clockLabel(row: { label: string }) {
 
 export function zoomBarParts(zoom: Zoom, row: Assignment) {
   const phase = phaseById(row.phaseId)
-  const name = row.title ?? phase?.name
+  const name = row.title ?? phase?.name ?? projectById(row.projectId)?.name.replace(' Tentative', '')
   const clock = clockLabel(row)
   if (zoom === 'days') return { name, hours: clock }
   if (zoom === 'weeks') return { name, hours: `${clock} · ${row.label}` }
