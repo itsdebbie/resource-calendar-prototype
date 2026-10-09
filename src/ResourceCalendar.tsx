@@ -760,7 +760,7 @@ function TimelineHeader({
         ))}
         <div className="rc-period-pin">{pin}</div>
       </div>
-      <div className="rc-cols">
+      <div className={`rc-cols${zoom === 'days' || zoom === 'weeks' ? ' is-dayweek' : ''}`}>
         <div className="rc-today-line" style={{ left: todayX }} />
         {weekGuideDay ? (
           <div
@@ -780,16 +780,27 @@ function TimelineHeader({
           >
             {zoom === 'days' ? (
               <>
-                <Text size="small" subdued>
+                <Text size="small" subdued className="rc-col-dow">
                   {col.sublabel}
                 </Text>
                 {col.today ? (
-                  <span className="rc-today-slot" aria-hidden>
-                    {col.label}
-                  </span>
+                  <span className="rc-today-pill">{col.label}</span>
                 ) : (
-                  <Text size="small">{col.label}</Text>
+                  <Text size="small" className="rc-col-num">
+                    {col.label}
+                  </Text>
                 )}
+              </>
+            ) : zoom === 'weeks' ? (
+              <>
+                <Text size="small" className="rc-col-dow">
+                  {col.label}
+                </Text>
+                {col.sublabel ? (
+                  <Text size="small" subdued className="rc-col-num">
+                    {col.sublabel}
+                  </Text>
+                ) : null}
               </>
             ) : (
               <>
@@ -803,7 +814,7 @@ function TimelineHeader({
             )}
           </div>
         ))}
-        {zoom === 'days' || zoom === 'weeks' ? (
+        {zoom === 'weeks' ? (
           <span className="rc-today-pill rc-today-mark" style={{ left: todayX }}>
             {todayDayNumber()}
           </span>
