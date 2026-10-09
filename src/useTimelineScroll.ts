@@ -11,6 +11,7 @@ import {
   columnsInExtent,
   contextLabel,
   dateAtWorldX,
+  isoFromTs,
   utc,
   worldXForDate,
   type TimeWindow,
@@ -47,6 +48,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
 
   const prevMin = useRef(extent.min)
   const prevZoom = useRef(zoom)
+  const prevColW = useRef(colW)
   const pendingAlign = useRef(true)
   const readyRef = useRef(false)
   const alignedAt = useRef(0)
@@ -68,6 +70,9 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const end = columnAtIndex(z, i1).end
     setFirstVisible((prev) => (prev === i0 ? prev : i0))
     setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+    if (readyRef.current && !pendingAlign.current) {
+      anchorRef.current = { iso: isoFromTs(start), offsetPx: sl - (i0 - min) * width }
+    }
   }, [])
 
   const dateAtClientX = useCallback(
@@ -214,6 +219,13 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     }
 
     if (pendingAlign.current) {
+      prevColW.current = colW
+      apply()
+      return () => cancelAnimationFrame(raf)
+    }
+
+    if (prevColW.current !== colW) {
+      prevColW.current = colW
       apply()
       return () => cancelAnimationFrame(raf)
     }

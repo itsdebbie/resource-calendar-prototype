@@ -344,7 +344,7 @@ export function moveOneDay(span: Span, fromDay: string, toDay: string): Span {
 
 export function segmentIsSliver(start: string, end: string, zoom: Zoom) {
   const days = diffDays(start, end) + 1
-  if (zoom === 'days') return days <= 1
+  if (zoom === 'days') return false
   if (zoom === 'weeks') return days <= 2
   if (zoom === 'months') return days <= 3
   if (zoom === 'quarters') return days <= 10
