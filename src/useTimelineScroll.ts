@@ -91,8 +91,8 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   const expandToIndex = useCallback((index: number) => {
     setExtent((e) => {
       let { min, max } = e
-      if (index - min < 12) min = index - BUFFER_COLS
-      if (max - index < 12) max = index + BUFFER_COLS
+      if (index < min) min = index - BUFFER_COLS
+      if (index > max) max = index + BUFFER_COLS
       if (min === e.min && max === e.max) return e
       return { min, max }
     })

@@ -158,7 +158,7 @@ export function ResourceCalendar() {
   const zoomLock = useRef(0)
 
   const timeline = useTimelineScroll(zoom, scrollRef)
-  const { columns, colW, viewWindow, dateAtClientX, jumpTo, ensureDate, autoScrollFromPointer, setAnchor, dateAtViewportCenter } =
+  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, dateAtViewportCenter } =
     timeline
 
   const visColumns = useMemo(() => {
@@ -278,27 +278,23 @@ export function ResourceCalendar() {
         const snap = id ? drag.snapshot[id] : undefined
         if (id && snap) {
           next[id] = moveOneDay(snap, drag.fromDay, date)
-          ensureDate(date)
         }
       } else if (drag.mode === 'resize') {
         const id = drag.ids[0]
         const snap = id ? drag.snapshot[id] : undefined
         if (id && snap) {
           next[id] = resizeSpanEnd(snap, date)
-          ensureDate(date)
         }
       } else {
         for (const id of drag.ids) {
           const snap = drag.snapshot[id]
           if (!snap) continue
           next[id] = shiftSpan(snap, delta)
-          ensureDate(next[id].start)
-          ensureDate(next[id].end)
         }
       }
       if (Object.keys(next).length) setSpans((prev) => ({ ...prev, ...next }))
     },
-    [autoScrollFromPointer, dateAtClientX, ensureDate],
+    [autoScrollFromPointer, dateAtClientX],
   )
 
   useEffect(() => {
