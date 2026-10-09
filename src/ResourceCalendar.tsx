@@ -46,6 +46,7 @@ import {
   DEMO_TODAY,
   GUTTER,
   isIsoDate,
+  isoFromTs,
   activeSegments,
   barStyle,
   contextLabel as contextCaption,
@@ -158,7 +159,7 @@ export function ResourceCalendar() {
   const zoomLock = useRef(0)
 
   const timeline = useTimelineScroll(zoom, scrollRef)
-  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, dateAtViewportCenter } =
+  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor } =
     timeline
 
   const visColumns = useMemo(() => {
@@ -199,18 +200,12 @@ export function ResourceCalendar() {
   const changeZoom = useCallback(
     (next: Zoom, iso?: string, offsetPx?: number) => {
       if (next === zoom) return
-      const el = scrollRef.current
-      const date = iso ?? dateAtViewportCenter()
-      if (offsetPx == null && el) {
-        const viewW = Math.min(el.clientWidth, window.innerWidth)
-        setAnchor(date, Math.max(0, (viewW - GUTTER) / 2))
-      } else {
-        setAnchor(date, offsetPx ?? 0)
-      }
+      const date = iso ?? isoFromTs(viewWindow.start)
+      setAnchor(date, offsetPx ?? 0)
       setZoom(next)
       setSelected([])
     },
-    [zoom, dateAtViewportCenter, setAnchor],
+    [zoom, viewWindow.start, setAnchor],
   )
 
   useEffect(() => {
@@ -240,14 +235,12 @@ export function ResourceCalendar() {
       if (!plus && !minus) return
       if (event.metaKey || event.ctrlKey || plus || minus) {
         event.preventDefault()
-        const el = scrollRef.current
-        const rect = el?.getBoundingClientRect()
-        changeZoom(zoomStep(zoom, plus ? -1 : 1), dateAtViewportCenter(), rect ? Math.max(0, (rect.width - GUTTER) / 2) : 0)
+        changeZoom(zoomStep(zoom, plus ? -1 : 1), isoFromTs(viewWindow.start), 0)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoom, changeZoom, dateAtViewportCenter])
+  }, [zoom, changeZoom, viewWindow.start])
 
   useEffect(() => {
     if (selected.length === 0) return
