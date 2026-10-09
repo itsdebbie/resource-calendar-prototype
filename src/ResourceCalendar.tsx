@@ -193,7 +193,7 @@ export function ResourceCalendar() {
     const minIndex = columns[0]?.index ?? timeline.firstVisible
     const maxIndex = columns[columns.length - 1]?.index ?? timeline.firstVisible
     const origin = Math.min(maxIndex, Math.max(minIndex, timeline.firstVisible))
-    const start = origin - 4
+    const start = origin
     const end = origin + timeline.visibleCount + 6
     const slice = columns.filter((col) => col.index >= start && col.index <= end)
     return slice.length > 0 ? slice : columns.slice(0, Math.min(columns.length, 24))
@@ -478,7 +478,7 @@ export function ResourceCalendar() {
                 <Tooltip
                   openOnHover
                   delay={600}
-                  placement="bottom"
+                  placement="top"
                   open={zoomTipOpen}
                   onOpenChange={(next) => setZoomTipOpen(next)}
                 >
@@ -597,7 +597,7 @@ export function ResourceCalendar() {
                   columns={columns}
                   visColumns={visColumns}
                   colW={colW}
-                  viewWindow={viewWindow}
+                  firstVisible={timeline.firstVisible}
                   weekGuideDay={gantt.weekGuideDay}
                 />
               </div>
@@ -711,21 +711,22 @@ function TimelineHeader({
   columns,
   visColumns,
   colW,
-  viewWindow,
+  firstVisible,
   weekGuideDay,
 }: {
   zoom: Zoom
   columns: Column[]
   visColumns: Column[]
   colW: number
-  viewWindow: TimeWindow
+  firstVisible: number
   weekGuideDay?: string
 }) {
   const minIndex = columns[0]?.index ?? 0
   const todayX = worldXForDate(zoom, minIndex, colW, DEMO_TODAY)
   const showMonthBand = zoom === 'days' || zoom === 'weeks'
   const bands = showMonthBand ? monthBands(columns) : yearBands(columns)
-  const pin = periodPinLabel(zoom, viewWindow)
+  const pinCol = visColumns.find((col) => col.index >= firstVisible) ?? visColumns[0]
+  const pin = pinCol ? periodPinLabel(zoom, { start: pinCol.start, end: pinCol.end }) : ''
 
   return (
     <div className="rc-head-timeline" style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}>
