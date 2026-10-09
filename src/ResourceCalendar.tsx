@@ -72,7 +72,7 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { CheckIcon, DeleteIcon, EditIcon, ExpandMoreIcon, ZoomInIcon, ZoomOutIcon } from './icons'
+import { CheckIcon, DeleteIcon, EditIcon, ExpandMoreIcon } from './icons'
 import './calendar.css'
 
 type Selection = string
@@ -450,9 +450,14 @@ export function ResourceCalendar() {
     onBarPointerDown,
   }
 
-  const canZoomIn = zoom !== 'days'
   const hoursFor = formatWindowCaption(viewWindow)
-  const canZoomOut = zoom !== 'year'
+  const [zoomTipOpen, setZoomTipOpen] = useState<boolean | undefined>(undefined)
+  const zoomTip = useMemo(() => {
+    const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
+    return mac
+      ? 'Zoom with pinch, ⌘ + scroll, or + / −'
+      : 'Zoom with pinch, Ctrl + scroll, or + / −'
+  }, [])
 
   return (
     <Flex direction="column" gap="3" className="rc-root">
@@ -470,22 +475,29 @@ export function ResourceCalendar() {
                 </SegmentedControl>
               </div>
               <div className="rc-toolbar-cluster">
-                <Text size="small" subdued>
-                  Zoom
-                </Text>
-                <Button size="small" icon={ZoomInIcon} disabled={!canZoomIn} onClick={() => changeZoom(zoomStep(zoom, -1))}>
-                  In
-                </Button>
-                <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-                  <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
-                  <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
-                  <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
-                  <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
-                  <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-                </SegmentedControl>
-                <Button size="small" icon={ZoomOutIcon} disabled={!canZoomOut} onClick={() => changeZoom(zoomStep(zoom, 1))}>
-                  Out
-                </Button>
+                <Tooltip
+                  openOnHover
+                  delay={600}
+                  placement="bottom"
+                  open={zoomTipOpen}
+                  onOpenChange={(next) => setZoomTipOpen(next)}
+                >
+                  <Tooltip.Trigger>
+                    <span
+                      className="rc-zoom-control"
+                      onPointerDown={() => setZoomTipOpen(false)}
+                    >
+                      <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+                        <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                      </SegmentedControl>
+                    </span>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content>{zoomTip}</Tooltip.Content>
+                </Tooltip>
               </div>
               <div className="rc-toolbar-cluster">
                 <Button

@@ -14,7 +14,7 @@ function App() {
           ]}
           description={
             <Text subdued>
-              Continuous timeline — scroll, jump to a date, or pinch/ctrl-scroll to zoom. Technician hours follow the dates on screen.
+              Continuous timeline — scroll or jump to a date. Technician hours follow the dates on screen.
             </Text>
           }
         />
