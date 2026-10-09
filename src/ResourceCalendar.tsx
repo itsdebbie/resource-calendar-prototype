@@ -482,19 +482,18 @@ export function ResourceCalendar() {
                   open={zoomTipOpen}
                   onOpenChange={(next) => setZoomTipOpen(next)}
                 >
-                  <Tooltip.Trigger>
-                    <span
-                      className="rc-zoom-control"
-                      onPointerDown={() => setZoomTipOpen(false)}
+                  <Tooltip.Trigger onPointerDown={() => setZoomTipOpen(false)}>
+                    <SegmentedControl
+                      size="small"
+                      selected={zoom}
+                      onChange={(value) => changeZoom(value as Zoom)}
                     >
-                      <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-                        <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
-                        <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
-                        <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
-                        <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
-                        <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-                      </SegmentedControl>
-                    </span>
+                      <SegmentedControl.Segment value="days">Days</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="weeks">Weeks</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="months">Months</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="quarters">Quarters</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                    </SegmentedControl>
                   </Tooltip.Trigger>
                   <Tooltip.Content>{zoomTip}</Tooltip.Content>
                 </Tooltip>

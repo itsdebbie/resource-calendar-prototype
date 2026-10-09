@@ -38,8 +38,8 @@
   min-width: 0;
 }
 
-.rc-zoom-control {
-  display: inline-flex;
+.rc-toolbar-cluster [data-anv='segmented-control'] {
+  vertical-align: middle;
 }
 
 .rc-body {
