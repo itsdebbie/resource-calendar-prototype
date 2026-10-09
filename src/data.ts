@@ -42,6 +42,7 @@ export type Assignment = {
   projectId: string
   personId: string | 'unassigned'
   phaseId?: string
+  title?: string
   label: string
   start: string
   end: string
@@ -204,6 +205,7 @@ export const assignments: Assignment[] = [
     id: 'kevin-site-check',
     projectId: 'summit',
     personId: 'kevin',
+    title: 'Site check',
     label: '8h',
     start: '2026-01-15',
     end: '2026-01-15',
@@ -358,12 +360,17 @@ export function assignmentWorkdaysInWindow(row: Assignment, window: { start: num
 export function personHoursInWindow(personId: string, rows: Assignment[], window: { start: number; end: number }) {
   const mine = rows.filter((row) => row.personId === personId)
   const booked = mine.reduce((sum, row) => sum + hoursPerWorkday(row) * assignmentWorkdaysInWindow(row, window), 0)
-  const cap = personId === 'unassigned' ? 0 : (weeklyCap(personId) / 5) * workdaysInWindow(window)
+  const days = workdaysInWindow(window)
+  const cap = personId === 'unassigned' ? 0 : (weeklyCap(personId) / 5) * days
   const bookedR = Math.round(booked)
   const capR = Math.round(cap)
   const names = mine
     .filter((row) => assignmentWorkdaysInWindow(row, window) > 0)
-    .map((row) => `${row.label} ${projectById(row.projectId)?.name.split(' ')[0] ?? ''}`.trim())
+    .map((row) => {
+      const project = projectById(row.projectId)?.name.split(' ')[0] ?? ''
+      const name = row.title ?? phaseById(row.phaseId)?.name
+      return [name, row.label, project].filter(Boolean).join(' ')
+    })
   return {
     booked: bookedR,
     cap: capR,
@@ -372,7 +379,7 @@ export function personHoursInWindow(personId: string, rows: Assignment[], window
     detail:
       personId === 'unassigned'
         ? names.join(' + ')
-        : `${bookedR}h scheduled / ${capR}h capacity in view${names.length ? ` · ${names.join(' + ')}` : ''}`,
+        : `${bookedR}h scheduled in the visible dates / ${capR}h capacity (${days} workdays × 8h)${names.length ? ` · ${names.join(' + ')}` : ''}`,
   }
 }
 
@@ -383,8 +390,9 @@ export function clockLabel(row: { label: string }) {
 
 export function zoomBarLabel(zoom: Zoom, row: Assignment) {
   const phase = phaseById(row.phaseId)
+  const name = row.title ?? phase?.name
   const clock = clockLabel(row)
-  if (zoom === 'days') return phase ? `${phase.name} · ${clock}` : clock
-  if (zoom === 'weeks') return phase ? `${phase.name} · ${clock} · ${row.label}` : `${clock} · ${row.label}`
-  return phase ? `${phase.name} · ${row.label}` : row.label
+  if (zoom === 'days') return name ? `${name} · ${clock}` : clock
+  if (zoom === 'weeks') return name ? `${name} · ${clock} · ${row.label}` : `${clock} · ${row.label}`
+  return name ? `${name} · ${row.label}` : row.label
 }

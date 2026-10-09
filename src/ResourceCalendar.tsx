@@ -52,21 +52,25 @@ import {
   contextLabel as contextCaption,
   diffDays,
   emptySpan,
+  formatDay,
+  formatMoveRange,
   formatRange,
   isDayZoom,
+  isEditableZoom,
   monthBands,
   moveOneDay,
   packLanes,
   resizeSpanEnd,
   segmentIsSliver,
   shiftSpan,
+  worldXForDate,
   zoomStep,
   type Column,
   type Span,
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { CheckIcon, DeleteIcon, DuplicateIcon, EditIcon, ExpandMoreIcon, RangeIcon, ZoomInIcon, ZoomOutIcon } from './icons'
+import { CheckIcon, DeleteIcon, EditIcon, ExpandMoreIcon, ZoomInIcon, ZoomOutIcon } from './icons'
 import './calendar.css'
 
 type Selection = string
@@ -79,7 +83,15 @@ type DragState = {
   snapshot: Record<string, Span>
   originX: number
   lastX: number
+  lastY: number
   moved: boolean
+}
+type DragHint = {
+  mode: DragMode
+  x: number
+  y: number
+  label: string
+  snapDay: string
 }
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
@@ -92,8 +104,10 @@ type GanttCtx = {
   viewWindow: TimeWindow
   selectedKeys: Set<string>
   dragIds: Set<string>
+  editable: boolean
+  weekGuideDay?: string
   resolve: (id: string, start: string, end: string, offDays?: string[]) => Span
-  onBarClick: (id: string) => void
+  onBarClick: (id: string, additive?: boolean) => void
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
 }
 
@@ -145,7 +159,6 @@ export function ResourceCalendar() {
   const [query, setQuery] = useState('')
   const [openIds, setOpenIds] = useState<Set<string>>(DEFAULT_OPEN)
   const [selected, setSelected] = useState<Selection[]>([])
-  const [rangeMode, setRangeMode] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editHours, setEditHours] = useState('8')
   const [hidden, setHidden] = useState<Set<string>>(new Set())
@@ -156,7 +169,9 @@ export function ResourceCalendar() {
   const dragRef = useRef<DragState | null>(null)
   const ignoreClick = useRef(false)
   const [dragIds, setDragIds] = useState<Set<string>>(new Set())
+  const [dragHint, setDragHint] = useState<DragHint | null>(null)
   const zoomLock = useRef(0)
+  const editable = isEditableZoom(zoom)
 
   const timeline = useTimelineScroll(zoom, scrollRef)
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor } =
@@ -249,14 +264,13 @@ export function ResourceCalendar() {
       if (!(target instanceof Element)) return
       if (target.closest('.rc-bar, .rc-bulk-bar, dialog, [role="dialog"]')) return
       setSelected([])
-      setRangeMode(false)
     }
     document.addEventListener('click', onClickAway, true)
     return () => document.removeEventListener('click', onClickAway, true)
   }, [selected.length])
 
   const applyDrag = useCallback(
-    (clientX: number) => {
+    (clientX: number, clientY?: number) => {
       const drag = dragRef.current
       if (!drag) return
       if (Math.abs(clientX - drag.originX) > 5) drag.moved = true
@@ -286,6 +300,20 @@ export function ResourceCalendar() {
         }
       }
       if (Object.keys(next).length) setSpans((prev) => ({ ...prev, ...next }))
+      const preview = Object.values(next)
+      if (preview.length) {
+        const start = preview.reduce((min, span) => (span.start < min ? span.start : min), preview[0]!.start)
+        const end = preview.reduce((max, span) => (span.end > max ? span.end : max), preview[0]!.end)
+        const label =
+          drag.mode === 'move' ? formatMoveRange(start, end) : drag.mode === 'resize' ? formatDay(end) : formatDay(date)
+        setDragHint({
+          mode: drag.mode,
+          x: clientX,
+          y: clientY ?? drag.lastY,
+          label,
+          snapDay: drag.mode === 'resize' ? end : date,
+        })
+      }
     },
     [autoScrollFromPointer, dateAtClientX],
   )
@@ -294,13 +322,15 @@ export function ResourceCalendar() {
     function onMove(event: PointerEvent) {
       if (!dragRef.current) return
       dragRef.current.lastX = event.clientX
-      applyDrag(event.clientX)
+      dragRef.current.lastY = event.clientY
+      applyDrag(event.clientX, event.clientY)
     }
     function onUp() {
       if (!dragRef.current) return
       const drag = dragRef.current
       dragRef.current = null
       setDragIds(new Set())
+      setDragHint(null)
       document.body.classList.remove('rc-grabbing')
       if (drag.moved) ignoreClick.current = true
     }
@@ -317,29 +347,29 @@ export function ResourceCalendar() {
     let frame = 0
     const tick = () => {
       const drag = dragRef.current
-      if (drag) applyDrag(drag.lastX)
+      if (drag) applyDrag(drag.lastX, drag.lastY)
       frame = requestAnimationFrame(tick)
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
   }, [dragIds, applyDrag])
 
-  function onBarClick(id: string) {
+  function onBarClick(id: string, additive = false) {
     if (ignoreClick.current) {
       ignoreClick.current = false
       return
     }
     setSelected((prev) => {
-      if (rangeMode) return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      if (additive) return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
       if (prev.length === 1 && prev[0] === id) return []
       return [id]
     })
   }
 
   function onBarPointerDown(event: ReactPointerEvent, id: string, span: Span, mode: DragMode) {
+    if (!editable || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
-    if (event.button !== 0) return
     const originDate = dateAtClientX(event.clientX)
     const ids =
       mode === 'move' && selectedKeys.has(id) && selected.length > 1
@@ -358,6 +388,7 @@ export function ResourceCalendar() {
       snapshot,
       originX: event.clientX,
       lastX: event.clientX,
+      lastY: event.clientY,
       moved: false,
     }
     setDragIds(new Set(ids))
@@ -400,10 +431,19 @@ export function ResourceCalendar() {
     viewWindow,
     selectedKeys,
     dragIds,
+    editable,
+    weekGuideDay: zoom === 'weeks' ? dragHint?.snapDay : undefined,
     resolve,
     onBarClick,
     onBarPointerDown,
   }
+
+  const hintCopy =
+    zoom === 'days'
+      ? 'Click a bar · drag a day · Shift-click to add'
+      : zoom === 'weeks'
+        ? 'Click a bar · drag or resize · Shift-click to add'
+        : 'Click a bar to select · editing is Days and Weeks only'
 
   const canZoomIn = zoom !== 'days'
   const canZoomOut = zoom !== 'year'
@@ -413,8 +453,8 @@ export function ResourceCalendar() {
       <Card padding="0" className="rc-card">
         <Flex direction="column" className="rc-body">
           <Flex direction="column" gap="2" className="rc-toolbar">
-            <Flex alignItems="center" gap="4" wrap="wrap">
-              <Flex alignItems="center" gap="2">
+            <div className="rc-toolbar-row">
+              <div className="rc-toolbar-cluster">
                 <Text size="small" subdued>
                   Group by
                 </Text>
@@ -422,8 +462,8 @@ export function ResourceCalendar() {
                   <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
                   <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
                 </SegmentedControl>
-              </Flex>
-              <Flex alignItems="center" gap="2">
+              </div>
+              <div className="rc-toolbar-cluster">
                 <Text size="small" subdued>
                   Zoom
                 </Text>
@@ -440,8 +480,8 @@ export function ResourceCalendar() {
                 <Button size="small" icon={ZoomOutIcon} disabled={!canZoomOut} onClick={() => changeZoom(zoomStep(zoom, 1))}>
                   Out
                 </Button>
-              </Flex>
-              <Flex alignItems="center" gap="2">
+              </div>
+              <div className="rc-toolbar-cluster">
                 <Button
                   size="small"
                   onClick={() => {
@@ -466,27 +506,29 @@ export function ResourceCalendar() {
                     }}
                   />
                 </label>
-              </Flex>
-              <SearchField
-                size="small"
-                placeholder="Filter people or projects"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onClear={() => setQuery('')}
-              />
-              <Button size="small" onClick={() => setOpenIds(new Set())}>
-                Collapse all
-              </Button>
-              <Button
-                size="small"
-                onClick={() =>
-                  setOpenIds(new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned']))
-                }
-              >
-                Expand all
-              </Button>
-            </Flex>
-            <Flex alignItems="center" gap="2" wrap="wrap">
+              </div>
+              <div className="rc-toolbar-cluster">
+                <SearchField
+                  size="small"
+                  placeholder="Filter people or projects"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onClear={() => setQuery('')}
+                />
+                <Button size="small" onClick={() => setOpenIds(new Set())}>
+                  Collapse all
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setOpenIds(new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned']))
+                  }
+                >
+                  Expand all
+                </Button>
+              </div>
+            </div>
+            <div className="rc-toolbar-row">
               <Text size="small" subdued>
                 Projects
               </Text>
@@ -503,8 +545,8 @@ export function ResourceCalendar() {
                     }
                   />
                 ))}
-              <Chip size="small" label={rangeMode ? 'Click another bar to add it' : 'Click a bar · drag to move'} />
-            </Flex>
+              <Chip size="small" label={hintCopy} />
+            </div>
           </Flex>
 
           <div
@@ -533,7 +575,7 @@ export function ResourceCalendar() {
                     </Text>
                   </Flex>
                 </div>
-                <TimelineHeader zoom={zoom} columns={columns} visColumns={visColumns} colW={colW} />
+                <TimelineHeader zoom={zoom} columns={columns} visColumns={visColumns} colW={colW} weekGuideDay={gantt.weekGuideDay} />
               </div>
 
               {groupBy === 'projects'
@@ -561,64 +603,52 @@ export function ResourceCalendar() {
         </Flex>
       </Card>
 
+      {zoom === 'weeks' && dragHint ? (
+        <div className="rc-drag-tip" style={{ left: dragHint.x, top: dragHint.y }}>
+          {dragHint.label}
+        </div>
+      ) : null}
+
       {selected.length > 0 ? (
         <div className="rc-bulk-bar">
           <div className="rc-bulk-bar-copy">
             <Text>
               <strong>{selected.length}</strong> bar{selected.length === 1 ? '' : 's'} selected
             </Text>
-            <Button
-              appearance="ghost"
-              onClick={() => {
-                setSelected([])
-                setRangeMode(false)
-              }}
-            >
-              Clear Selection
+            <Button appearance="ghost" onClick={() => setSelected([])}>
+              Clear
             </Button>
           </div>
-          <div className="rc-bulk-bar-actions">
-            <Button
-              appearance="secondary"
-              icon={RangeIcon}
-              onClick={() => {
-                setRangeMode(true)
-                toast.info({ title: 'Select Range', message: 'Click another bar to add the whole bar to the selection.' })
-              }}
-            >
-              Select Range
-            </Button>
-            <Button appearance="secondary" icon={DuplicateIcon} onClick={() => toast.info({ title: 'Duplicate', message: 'Duplicate is mocked in this prototype.' })}>
-              Duplicate
-            </Button>
-            <Button
-              appearance="secondary"
-              icon={DeleteIcon}
-              onClick={() => {
-                const ids = new Set(
-                  visibleAssignments
-                    .filter((a) => selectedKeys.has(a.id) || (a.phaseId != null && selectedKeys.has(a.phaseId)) || selectedKeys.has(`proj-${a.projectId}`))
-                    .map((a) => a.id),
-                )
-                setHidden((prev) => new Set([...prev, ...ids]))
-                setSelected([])
-                setRangeMode(false)
-                toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype.' })
-              }}
-            >
-              Delete
-            </Button>
-            <Button
-              appearance="secondary"
-              icon={EditIcon}
-              onClick={() => {
-                setEditHours('8')
-                setEditOpen(true)
-              }}
-            >
-              Edit
-            </Button>
-          </div>
+          {editable ? (
+            <div className="rc-bulk-bar-actions">
+              <Button
+                appearance="secondary"
+                icon={DeleteIcon}
+                onClick={() => {
+                  const ids = new Set(
+                    visibleAssignments
+                      .filter((a) => selectedKeys.has(a.id) || (a.phaseId != null && selectedKeys.has(a.phaseId)) || selectedKeys.has(`proj-${a.projectId}`))
+                      .map((a) => a.id),
+                  )
+                  setHidden((prev) => new Set([...prev, ...ids]))
+                  setSelected([])
+                  toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype.' })
+                }}
+              >
+                Delete
+              </Button>
+              <Button
+                appearance="secondary"
+                icon={EditIcon}
+                onClick={() => {
+                  setEditHours('8')
+                  setEditOpen(true)
+                }}
+              >
+                Edit
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -628,8 +658,8 @@ export function ResourceCalendar() {
           <Flex direction="column" gap="3">
             <Text subdued>
               {isDayZoom(zoom)
-                ? 'Hours apply to the selected day. Switch to Weeks or wider to move or resize the whole bar.'
-                : 'Edits hours on the selected bar' + (selected.length === 1 ? '' : 's') + '.'}
+                ? 'Hours apply to the selected day. Switch to Weeks to move or resize the whole bar.'
+                : 'Edits hours on the selected bar' + (selected.length === 1 ? '' : 's') + '. Month, Quarter, and Year are read-only.'}
             </Text>
             <TextField name="hours" label={isDayZoom(zoom) ? 'Hours this day' : 'Hours per day'} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
           </Flex>
@@ -657,11 +687,13 @@ function TimelineHeader({
   columns,
   visColumns,
   colW,
+  weekGuideDay,
 }: {
   zoom: Zoom
   columns: Column[]
   visColumns: Column[]
   colW: number
+  weekGuideDay?: string
 }) {
   const showMonthBand = zoom === 'days' || zoom === 'weeks'
   const minIndex = columns[0]?.index ?? 0
@@ -681,6 +713,15 @@ function TimelineHeader({
         </div>
       ) : null}
       <div className="rc-cols">
+        {weekGuideDay ? (
+          <div
+            className="rc-day-guide"
+            style={{
+              left: worldXForDate(zoom, minIndex, colW, weekGuideDay),
+              width: colW / 7,
+            }}
+          />
+        ) : null}
         {visColumns.map((col) => (
           <div
             className={`rc-col${col.today ? ' is-today' : ''}${col.weekend ? ' is-weekend' : ''}`}
@@ -1040,7 +1081,7 @@ function Timeline({
   thin?: boolean
   children?: ReactNode
 }) {
-  const { columns, visColumns, colW } = useGantt()
+  const { columns, visColumns, colW, zoom, weekGuideDay } = useGantt()
   const minIndex = columns[0]?.index ?? 0
   const style = {
     ['--rc-lanes' as string]: String(packed?.laneCount ?? 1),
@@ -1056,6 +1097,15 @@ function Timeline({
           style={{ ['--rc-i' as string]: col.index - minIndex }}
         />
       ))}
+      {weekGuideDay ? (
+        <div
+          className="rc-day-guide"
+          style={{
+            left: worldXForDate(zoom, minIndex, colW, weekGuideDay),
+            width: colW / 7,
+          }}
+        />
+      ) : null}
       {children}
     </div>
   )
@@ -1084,9 +1134,9 @@ function SpanBar({
   lane?: number
   hint?: string
 }) {
-  const { zoom, columns, dragIds, onBarClick, onBarPointerDown } = useGantt()
+  const { zoom, columns, dragIds, editable, onBarClick, onBarPointerDown } = useGantt()
   const segs = activeSegments(span.start, span.end, span.offDays)
-  const wholeBar = !isDayZoom(zoom)
+  const wholeBar = zoom === 'weeks'
   return (
     <>
       {segs.map((seg) => (
@@ -1106,6 +1156,7 @@ function SpanBar({
           columns={columns}
           zoom={zoom}
           wholeBar={wholeBar}
+          editable={editable}
           dragging={dragIds.has(id)}
           onBarClick={onBarClick}
           onBarPointerDown={onBarPointerDown}
@@ -1130,6 +1181,7 @@ function BarSegment({
   columns,
   zoom,
   wholeBar,
+  editable,
   dragging,
   onBarClick,
   onBarPointerDown,
@@ -1148,8 +1200,9 @@ function BarSegment({
   columns: Column[]
   zoom: Zoom
   wholeBar: boolean
+  editable: boolean
   dragging: boolean
-  onBarClick: (id: string) => void
+  onBarClick: (id: string, additive?: boolean) => void
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
 }) {
   const style = barStyle(seg.start, seg.end, columns)
@@ -1164,7 +1217,7 @@ function BarSegment({
     <div
       role="button"
       tabIndex={-1}
-      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}`}
+      className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}`}
       style={
         {
           left: `calc(${style.left} + 3px)`,
@@ -1178,10 +1231,10 @@ function BarSegment({
       title={tooltip}
       onClick={(event) => {
         event.stopPropagation()
-        if (!dragging) onBarClick(id)
+        if (!dragging) onBarClick(id, event.shiftKey)
       }}
       onPointerDown={(event) => {
-        if (event.button !== 0) return
+        if (!editable || event.button !== 0) return
         onBarPointerDown(event, id, span, wholeBar ? 'move' : 'day')
       }}
       onKeyDown={(event) => {
@@ -1193,7 +1246,7 @@ function BarSegment({
     >
       {(confirmed || selected) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null}
       {!thin && label && !sliver ? <span className="rc-bar-label">{label}</span> : null}
-      {wholeBar && !thin ? (
+      {editable && wholeBar && !thin ? (
         <span
           className="rc-bar-handle"
           onPointerDown={(event) => {

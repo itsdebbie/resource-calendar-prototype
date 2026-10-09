@@ -359,6 +359,18 @@ export function formatRange(start: string, end: string) {
   return start === end ? fa : `${fa} – ${fb}`
 }
 
+export function formatDay(iso: string) {
+  const d = new Date(utc(iso))
+  return `${DAYS[d.getUTCDay()]} ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`
+}
+
+export function formatMoveRange(start: string, end: string) {
+  if (start === end) return formatDay(start)
+  const a = new Date(utc(start))
+  const b = new Date(utc(end))
+  return `${MONTHS[a.getUTCMonth()]} ${a.getUTCDate()} to ${MONTHS[b.getUTCMonth()]} ${b.getUTCDate()}`
+}
+
 export function workdaysInRange(start: number, end: number) {
   let n = 0
   for (let t = start; t < end; t += DAY_MS) {
@@ -410,4 +422,8 @@ export function packLanes<T extends { id: string; start: string; end: string }>(
 
 export function isDayZoom(zoom: Zoom) {
   return zoom === 'days'
+}
+
+export function isEditableZoom(zoom: Zoom) {
+  return zoom === 'days' || zoom === 'weeks'
 }

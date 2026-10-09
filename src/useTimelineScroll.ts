@@ -18,7 +18,7 @@ import {
 
 function extentAround(zoom: Zoom, iso: string, extra = 24) {
   const idx = columnIndexAt(zoom, utc(iso))
-  return { min: idx, max: idx + BUFFER_COLS + extra }
+  return { min: idx - BUFFER_COLS, max: idx + BUFFER_COLS + extra }
 }
 
 function visiblePx(el: HTMLElement) {
@@ -50,6 +50,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   const pendingAlign = useRef(true)
   const readyRef = useRef(false)
   const alignedAt = useRef(0)
+  const slideRef = useRef(false)
 
   const columns = useMemo(() => columnsInExtent(zoom, extent.min, extent.max), [zoom, extent.min, extent.max])
   const canvasWidth = GUTTER + columns.length * colW
@@ -98,6 +99,12 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     })
   }, [])
 
+  const slideByCols = useCallback((cols: number) => {
+    if (!cols) return
+    slideRef.current = true
+    setExtent((e) => ({ min: e.min + cols, max: e.max + cols }))
+  }, [])
+
   const setAnchor = useCallback((iso: string, offsetPx: number) => {
     anchorRef.current = { iso, offsetPx }
   }, [])
@@ -124,14 +131,21 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     (dx: number) => {
       const el = scrollRef.current
       if (!el) return
+      const before = el.scrollLeft
       el.scrollLeft += dx
-      alignedAt.current = el.scrollLeft
-      const leftIdx = extentRef.current.min + Math.floor(el.scrollLeft / colWRef.current)
-      expandToIndex(leftIdx)
-      expandToIndex(leftIdx + Math.ceil(visiblePx(el) / colWRef.current))
+      const moved = el.scrollLeft - before
+      if (Math.abs(moved) < 1 && Math.abs(dx) > 1) {
+        const cols = Math.max(1, Math.round(Math.abs(dx) / Math.max(1, colWRef.current)))
+        slideByCols(Math.sign(dx) * cols)
+      } else {
+        alignedAt.current = el.scrollLeft
+        const leftIdx = extentRef.current.min + Math.floor(el.scrollLeft / colWRef.current)
+        expandToIndex(leftIdx)
+        expandToIndex(leftIdx + Math.ceil(visiblePx(el) / colWRef.current))
+      }
       publishWindow(el)
     },
-    [scrollRef, expandToIndex, publishWindow],
+    [scrollRef, expandToIndex, publishWindow, slideByCols],
   )
 
   const autoScrollFromPointer = useCallback(
@@ -206,7 +220,11 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
 
     const deltaCols = prevMin.current - extent.min
     if (deltaCols !== 0) {
-      el.scrollLeft += deltaCols * colW
+      if (slideRef.current) {
+        slideRef.current = false
+      } else {
+        el.scrollLeft += deltaCols * colW
+      }
       alignedAt.current = el.scrollLeft
       prevMin.current = extent.min
     }
@@ -223,9 +241,11 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       if (!readyRef.current || pendingAlign.current) return
       const width = colWRef.current
       const viewW = Math.min(el.clientWidth, window.innerWidth)
-      if (el.scrollWidth <= viewW + width) return
-      if (Math.abs(el.scrollLeft - alignedAt.current) < 2) return
-      if (el.scrollLeft > 8 && el.scrollLeft < width * 6) {
+      const noOverflow = el.scrollWidth <= viewW + width
+      if (Math.abs(el.scrollLeft - alignedAt.current) < 2 && !noOverflow) return
+      alignedAt.current = el.scrollLeft
+      if (noOverflow) return
+      if (el.scrollLeft < width * 6) {
         setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
       } else if (el.scrollLeft + viewW > el.scrollWidth - width * 6) {
         setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
@@ -234,10 +254,18 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
 
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
-      if (event.deltaX < -2 && el.scrollLeft <= 2) {
-        setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
-      } else if (event.deltaX > 2 && el.scrollLeft + el.clientWidth >= el.scrollWidth - 2) {
-        setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
+      const dx = event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX
+      if (Math.abs(dx) < 2) return
+      const viewW = Math.min(el.clientWidth, window.innerWidth)
+      const noOverflow = el.scrollWidth <= viewW + 4
+      const atStart = el.scrollLeft <= 2
+      const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2
+      if (dx < 0 && (atStart || noOverflow)) {
+        if (noOverflow) slideByCols(-BUFFER_COLS)
+        else setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
+      } else if (dx > 0 && (atEnd || noOverflow)) {
+        if (noOverflow) slideByCols(BUFFER_COLS)
+        else setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
       }
     }
 
@@ -247,7 +275,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('wheel', onWheel)
     }
-  }, [scrollRef, publishWindow])
+  }, [scrollRef, publishWindow, slideByCols])
 
   return {
     columns,
