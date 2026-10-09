@@ -21,35 +21,45 @@ import {
   Popover,
   SearchField,
   SegmentedControl,
+  Switch,
   Text,
   TextField,
   toast,
   Tooltip,
 } from '@servicetitan/anvil2'
 import {
+  assignmentAddress,
+  assignmentLabel,
   assignments,
-  hoursCaption,
+  clockLabel,
+  collectIssues,
+  displayHours,
   hoursOver,
   hoursTooltipLine,
+  hoursTotal,
   overCapacityAssignmentIds,
   people,
   personById,
   personHoursInWindow,
-  phaseById,
   phases,
   projectById,
   projects,
   zoomBarLabel,
   zoomBarParts,
   type Assignment,
+  type CalendarIssue,
   type GroupBy,
+  type IssueKind,
   type Project,
   type Zoom,
 } from './data'
 import {
+  CREW_PANEL_KEY,
   DEMO_TODAY,
   GUTTER,
+  SHORT_BAR_PX,
   addDays,
+  barPixelBox,
   isIsoDate,
   isoFromTs,
   activeSegments,
@@ -69,8 +79,9 @@ import {
   resizeSpanEnd,
   segmentIsSliver,
   shiftSpan,
-  todayDayNumber,
   todayMarkerX,
+  weekIndexOf,
+  weekendSlices,
   worldXForDate,
   yearBands,
   zoomStep,
@@ -79,7 +90,17 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { CheckIcon, DeleteIcon, EditIcon, ExpandMoreIcon } from './icons'
+import { tintFill } from './palette'
+import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
+import { CrewPanel } from './CrewPanel'
+import {
+  CalendarCheckIcon,
+  DeleteIcon,
+  EditIcon,
+  ExpandMoreIcon,
+  PersonQuestionIcon,
+  WarningIcon,
+} from './icons'
 import './calendar.css'
 
 type Selection = string
@@ -104,6 +125,7 @@ type DragHint = {
 }
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
+const ALL_OPEN = new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned'])
 
 function isTextEntryTarget(target: EventTarget | null) {
   if (target instanceof HTMLTextAreaElement) return true
@@ -111,6 +133,16 @@ function isTextEntryTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLInputElement)) return false
   return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
 }
+
+function readCrewOpen() {
+  try {
+    return localStorage.getItem(CREW_PANEL_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+type ClickMods = { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean }
 
 type GanttCtx = {
   zoom: Zoom
@@ -123,10 +155,11 @@ type GanttCtx = {
   selectedKeys: Set<string>
   dragIds: Set<string>
   editable: boolean
+  showWeekends: boolean
   weekGuideDay?: string
   resolve: (id: string, start: string, end: string, offDays?: string[]) => Span
-  onBarClick: (id: string, additive?: boolean) => void
-  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
+  onBarClick: (id: string, mods?: ClickMods) => void
+  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode, extraIds?: string[]) => void
   onEditInWeek: (span: Span) => void
 }
 
@@ -138,46 +171,14 @@ function useGantt() {
   return ctx
 }
 
-function HoursReadout({
-  scheduled,
-  budget,
-  actual,
-  fallback,
-  scope = 'project',
-}: {
-  scheduled?: number
-  budget?: number
-  actual?: number
-  fallback?: string
-  scope?: 'project' | 'phase'
-}) {
-  if (scheduled == null || budget == null) {
-    return fallback ? (
-      <Text size="small" subdued>
-        {fallback}
-      </Text>
-    ) : null
-  }
-  const over = hoursOver(scheduled, budget, actual)
-  const pct = budget > 0 ? Math.min(100, (scheduled / budget) * 100) : 0
-  const caption = hoursCaption(scheduled, budget)
-  const kind = scope === 'phase' ? 'phase' : 'project'
-  const tip = `Whole-${kind} total: ${scheduled} scheduled / ${budget} budget · ${actual ?? 0} actual. Not limited to the visible dates.`
+function Name({ children, title }: { children: string; title?: string }) {
+  const full = title ?? children
   return (
-    <Tooltip openOnHover>
+    <Tooltip openOnHover delay={400}>
       <Tooltip.Trigger>
-        <div className="rc-hours">
-          {scheduled > 0 ? (
-            <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
-              <span style={{ width: `${pct}%` }} />
-            </div>
-          ) : null}
-          <Text size="small" className={`rc-hours-label${over ? ' is-over' : ''}`} subdued={!over}>
-            {caption} {kind}
-          </Text>
-        </div>
+        <Text className="rc-truncate">{children}</Text>
       </Tooltip.Trigger>
-      <Tooltip.Content>{tip}</Tooltip.Content>
+      <Tooltip.Content>{full}</Tooltip.Content>
     </Tooltip>
   )
 }
@@ -194,11 +195,17 @@ export function ResourceCalendar() {
   const [activeProjects, setActiveProjects] = useState<string[]>(['summit', 'apex', 'monolith'])
   const [spans, setSpans] = useState<Record<string, Span>>({})
   const [goTo, setGoTo] = useState(DEMO_TODAY)
+  const [showWeekends, setShowWeekends] = useState(false)
+  const [crewOpen, setCrewOpen] = useState(readCrewOpen)
+  const [showAllCrew, setShowAllCrew] = useState(false)
+  const [finder, setFinder] = useState<{ kind: IssueKind; index: number } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const ignoreClick = useRef(false)
+  const selectAnchor = useRef<string | null>(null)
   const [dragIds, setDragIds] = useState<Set<string>>(new Set())
   const [dragHint, setDragHint] = useState<DragHint | null>(null)
+  const [hoursBefore, setHoursBefore] = useState<Record<string, number> | null>(null)
   const zoomLock = useRef(0)
   const editable = isEditableZoom(zoom)
 
@@ -217,13 +224,29 @@ export function ResourceCalendar() {
   }, [columns, timeline.firstVisible, timeline.visibleCount])
 
   const q = query.trim().toLowerCase()
-  const visibleAssignments = assignments.filter((a) => !hidden.has(a.id))
+  const visibleAssignments = useMemo(
+    () => assignments.filter((a) => !hidden.has(a.id)),
+    [hidden],
+  )
   const selectedKeys = new Set(selected)
 
   const resolve = useCallback(
     (id: string, start: string, end: string, offDays?: string[]) => spans[id] ?? emptySpan(start, end, offDays ?? []),
     [spans],
   )
+
+  const resolvedAssignments = useMemo(
+    () => visibleAssignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
+    [visibleAssignments, resolve],
+  )
+
+  const [crewAssignments, setCrewAssignments] = useState(resolvedAssignments)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      setCrewAssignments(resolvedAssignments.map((row) => ({ ...row })))
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [resolvedAssignments])
 
   const spanById = useCallback(
     (id: string): Span | undefined => {
@@ -274,6 +297,17 @@ export function ResourceCalendar() {
     function onKey(event: KeyboardEvent) {
       const target = event.target
       if (isTextEntryTarget(target)) return
+      if (finder) {
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault()
+          stepFinder(event.key === 'ArrowDown' ? 1 : -1)
+          return
+        }
+        if (event.key === 'Escape') {
+          setFinder(null)
+          return
+        }
+      }
       const plus = event.key === '=' || event.key === '+'
       const minus = event.key === '-' || event.key === '_'
       if (!plus && !minus) return
@@ -282,14 +316,14 @@ export function ResourceCalendar() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [zoom, changeZoom, viewWindow.start])
+  })
 
   useEffect(() => {
     if (selected.length === 0) return
     function onClickAway(event: Event) {
       const target = event.target
       if (!(target instanceof Element)) return
-      if (target.closest('.rc-bar, .rc-bulk-bar, dialog, [role="dialog"]')) return
+      if (target.closest('.rc-bar, .rc-bulk-bar, .rc-chip-item, .rc-finder, .rc-issue-chip, dialog, [role="dialog"]')) return
       setSelected([])
     }
     document.addEventListener('click', onClickAway, true)
@@ -358,6 +392,7 @@ export function ResourceCalendar() {
       dragRef.current = null
       setDragIds(new Set())
       setDragHint(null)
+      setHoursBefore(null)
       document.body.classList.remove('rc-grabbing')
       if (drag.moved) ignoreClick.current = true
     }
@@ -381,28 +416,80 @@ export function ResourceCalendar() {
     return () => cancelAnimationFrame(frame)
   }, [dragIds, applyDrag])
 
-  function onBarClick(id: string, additive = false) {
-    if (!editable) return
+  const matches = (name: string) => !q || name.toLowerCase().includes(q)
+
+  const projectList = projects.filter((p) => {
+    if (p.leftover) return matches(p.name) || people.some((pe) => pe.leftover && matches(pe.name))
+    if (!activeProjects.includes(p.id) && !p.leftover) return false
+    return matches(p.name) || visibleAssignments.some((a) => a.projectId === p.id && personById(a.personId)?.name.toLowerCase().includes(q))
+  })
+
+  const personList = [
+    { id: 'unassigned', name: 'Unassigned' },
+    ...people,
+  ].filter(
+    (p) =>
+      matches(p.name) ||
+      visibleAssignments.some(
+        (a) => a.personId === p.id && (projectById(a.projectId)?.name.toLowerCase().includes(q) ?? false),
+      ),
+  )
+
+  const orderedIds = useMemo(() => {
+    const ids: string[] = []
+    if (groupBy === 'projects') {
+      for (const project of projectList) {
+        ids.push(`proj-${project.id}`)
+        for (const phase of phases.filter((p) => p.projectId === project.id)) ids.push(phase.id)
+        for (const row of visibleAssignments.filter((a) => a.projectId === project.id)) ids.push(row.id)
+      }
+    } else {
+      for (const entry of personList) {
+        for (const row of visibleAssignments.filter((a) => a.personId === entry.id)) ids.push(row.id)
+      }
+    }
+    return ids
+  }, [groupBy, projectList, personList, visibleAssignments])
+
+  function onBarClick(id: string, mods: ClickMods = {}) {
     if (ignoreClick.current) {
       ignoreClick.current = false
       return
     }
+    const additive = Boolean(mods.metaKey || mods.ctrlKey)
+    const range = Boolean(mods.shiftKey)
     setSelected((prev) => {
-      if (additive) return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      if (range && selectAnchor.current) {
+        const order = orderedIds
+        const a = order.indexOf(selectAnchor.current)
+        const b = order.indexOf(id)
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a]
+          return order.slice(lo, hi + 1)
+        }
+      }
+      if (additive) {
+        selectAnchor.current = id
+        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      }
+      selectAnchor.current = id
       if (prev.length === 1 && prev[0] === id) return []
       return [id]
     })
   }
 
-  function onBarPointerDown(event: ReactPointerEvent, id: string, span: Span, mode: DragMode) {
+  function onBarPointerDown(event: ReactPointerEvent, id: string, span: Span, mode: DragMode, extraIds?: string[]) {
     if (!editable || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
+    setHoursBefore(snapshotCrewHours(crewRows))
     const originDate = dateAtClientX(event.clientX)
     const ids =
-      mode === 'move' && selectedKeys.has(id) && selected.length > 1
-        ? selected.filter((key) => spanById(key))
-        : [id]
+      extraIds && extraIds.length > 1
+        ? extraIds
+        : mode === 'move' && selectedKeys.has(id) && selected.length > 1
+          ? selected.filter((key) => spanById(key))
+          : [id]
     const snapshot: Record<string, Span> = {}
     for (const key of ids) {
       const value = key === id ? span : spanById(key)
@@ -432,25 +519,6 @@ export function ResourceCalendar() {
     })
   }
 
-  const matches = (name: string) => !q || name.toLowerCase().includes(q)
-
-  const projectList = projects.filter((p) => {
-    if (p.leftover) return matches(p.name) || people.some((pe) => pe.leftover && matches(pe.name))
-    if (!activeProjects.includes(p.id) && !p.leftover) return false
-    return matches(p.name) || visibleAssignments.some((a) => a.projectId === p.id && personById(a.personId)?.name.toLowerCase().includes(q))
-  })
-
-  const personList = [
-    { id: 'unassigned', name: 'Unassigned' },
-    ...people,
-  ].filter(
-    (p) =>
-      matches(p.name) ||
-      visibleAssignments.some(
-        (a) => a.personId === p.id && (projectById(a.projectId)?.name.toLowerCase().includes(q) ?? false),
-      ),
-  )
-
   const onEditInWeek = useCallback(
     (span: Span) => {
       const mid = addDays(span.start, Math.floor(diffDays(span.start, span.end) / 2))
@@ -458,6 +526,62 @@ export function ResourceCalendar() {
     },
     [changeZoom, viewportPx],
   )
+
+  const issues = useMemo(
+    () => collectIssues(crewAssignments, activeProjects, showWeekends),
+    [crewAssignments, activeProjects, showWeekends],
+  )
+
+  const crewRows = useMemo(
+    () => buildCrewRows(people, crewAssignments, visColumns, showWeekends, showAllCrew, activeProjects),
+    [crewAssignments, visColumns, showWeekends, showAllCrew, activeProjects],
+  )
+
+  const crewCounts = useMemo(
+    () => crewOnVisibleCount(people, crewAssignments, activeProjects),
+    [crewAssignments, activeProjects],
+  )
+
+  function focusIssue(issue: CalendarIssue) {
+    setOpenIds((prev) => {
+      const next = new Set(prev)
+      next.add(issue.projectId)
+      if (issue.personId) next.add(issue.personId)
+      return next
+    })
+    setCrewOpen(true)
+    try {
+      localStorage.setItem(CREW_PANEL_KEY, '1')
+    } catch {
+      /* ignore */
+    }
+    setSelected([issue.targetId])
+    selectAnchor.current = issue.targetId
+    jumpTo(issue.date, Math.round(viewportPx / 3))
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-span="${issue.targetId}"]`)?.scrollIntoView({ block: 'center', inline: 'nearest' })
+    })
+  }
+
+  function openFinder(kind: IssueKind) {
+    const list = issues[kind]
+    if (list.length === 0) return
+    setFinder({ kind, index: 0 })
+    const first = list[0]
+    if (first) focusIssue(first)
+  }
+
+  function stepFinder(delta: number) {
+    setFinder((prev) => {
+      if (!prev) return prev
+      const list = issues[prev.kind]
+      if (list.length === 0) return null
+      const index = (prev.index + delta + list.length) % list.length
+      const issue = list[index]
+      if (issue) focusIssue(issue)
+      return { ...prev, index }
+    })
+  }
 
   const gantt: GanttCtx = {
     zoom,
@@ -470,6 +594,7 @@ export function ResourceCalendar() {
     selectedKeys,
     dragIds,
     editable,
+    showWeekends,
     weekGuideDay: zoom === 'weeks' ? dragHint?.snapDay : undefined,
     resolve,
     onBarClick,
@@ -485,43 +610,27 @@ export function ResourceCalendar() {
       : 'Zoom with pinch, Ctrl + scroll, or + / −'
   }, [])
 
+  const draggingPersonId = useMemo(() => {
+    const id = [...dragIds][0]
+    if (!id) return undefined
+    return assignments.find((row) => row.id === id)?.personId
+  }, [dragIds])
+
+  function persistCrew(next: boolean) {
+    setCrewOpen(next)
+    try {
+      localStorage.setItem(CREW_PANEL_KEY, next ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }
+
   return (
-    <Flex direction="column" gap="3" className="rc-root">
+    <Flex direction="column" gap="3" className={`rc-root ${groupBy === 'people' ? 'rc-is-people' : 'rc-is-projects'}`}>
       <Card padding="0" className="rc-card">
         <Flex direction="column" className="rc-body">
           <Flex direction="column" gap="2" className="rc-toolbar">
             <div className="rc-toolbar-row">
-              <div className="rc-toolbar-cluster">
-                <Text size="small" subdued>
-                  Group by
-                </Text>
-                <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
-                  <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
-                  <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
-                </SegmentedControl>
-              </div>
-              <div className="rc-toolbar-cluster">
-                <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
-                  <Tooltip.Trigger
-                    onPointerDown={() => setZoomTipOpen(false)}
-                    onClick={() => setZoomTipOpen(false)}
-                    onMouseLeave={() => setZoomTipOpen(undefined)}
-                  >
-                    <SegmentedControl
-                      size="small"
-                      selected={zoom}
-                      onChange={(value) => changeZoom(value as Zoom)}
-                    >
-                      <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-                    </SegmentedControl>
-                  </Tooltip.Trigger>
-                  <Tooltip.Content>{zoomTip}</Tooltip.Content>
-                </Tooltip>
-              </div>
               <div className="rc-toolbar-cluster">
                 <Button
                   size="small"
@@ -533,9 +642,6 @@ export function ResourceCalendar() {
                   Today
                 </Button>
                 <label className="rc-date-jump">
-                  <Text size="small" subdued>
-                    Go to
-                  </Text>
                   <input
                     type="date"
                     value={goTo}
@@ -549,30 +655,38 @@ export function ResourceCalendar() {
                 </label>
               </div>
               <div className="rc-toolbar-cluster">
-                <SearchField
-                  size="small"
-                  placeholder="Filter people or projects"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onClear={() => setQuery('')}
+                <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
+                  <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
+                  <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
+                </SegmentedControl>
+              </div>
+              <div className="rc-toolbar-cluster">
+                <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
+                  <Tooltip.Trigger
+                    onPointerDown={() => setZoomTipOpen(false)}
+                    onClick={() => setZoomTipOpen(false)}
+                    onMouseLeave={() => setZoomTipOpen(undefined)}
+                  >
+                    <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+                      <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+                      <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                    </SegmentedControl>
+                  </Tooltip.Trigger>
+                  <Tooltip.Content>{zoomTip}</Tooltip.Content>
+                </Tooltip>
+              </div>
+              <div className="rc-toolbar-cluster rc-toolbar-end">
+                <Switch
+                  label="Show Weekends"
+                  checked={showWeekends}
+                  onChange={(_, state) => setShowWeekends(state.checked)}
                 />
-                <Button size="small" onClick={() => setOpenIds(new Set())}>
-                  Collapse all
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() =>
-                    setOpenIds(new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned']))
-                  }
-                >
-                  Expand all
-                </Button>
               </div>
             </div>
             <div className="rc-toolbar-row">
-              <Text size="small" subdued>
-                Projects
-              </Text>
               {projects
                 .filter((p) => !p.leftover)
                 .map((p) => (
@@ -586,6 +700,14 @@ export function ResourceCalendar() {
                     }
                   />
                 ))}
+              <SearchField
+                size="small"
+                placeholder="Filter people or projects"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onClear={() => setQuery('')}
+              />
+              <KeyPopover />
             </div>
           </Flex>
 
@@ -600,7 +722,7 @@ export function ResourceCalendar() {
             }
             onClick={(event) => {
               if (!(event.target instanceof Element)) return
-              if (event.target.closest('.rc-bar, .rc-overlay')) return
+              if (event.target.closest('.rc-bar, .rc-overlay, .rc-crew, .rc-chip-item')) return
               setSelected([])
             }}
           >
@@ -610,7 +732,21 @@ export function ResourceCalendar() {
                 <div className="rc-gutter-head">
                   <div className="rc-gutter-copy">
                     <Text>{groupBy === 'projects' ? 'Projects' : 'People'}</Text>
+                    <button
+                      type="button"
+                      className="rc-link-btn"
+                      onClick={() => setOpenIds((prev) => (prev.size > 2 ? new Set() : new Set(ALL_OPEN)))}
+                    >
+                      {openIds.size > 2 ? 'Collapse all' : 'Expand all'}
+                    </button>
                   </div>
+                  {groupBy === 'projects' ? (
+                    <div className="rc-gutter-nums">
+                      <span>Budget</span>
+                      <span>Sched.</span>
+                      <span>Actual</span>
+                    </div>
+                  ) : null}
                 </div>
                 <TimelineHeader
                   zoom={zoom}
@@ -619,6 +755,7 @@ export function ResourceCalendar() {
                   colW={colW}
                   firstVisible={timeline.firstVisible}
                   weekGuideDay={gantt.weekGuideDay}
+                  showWeekends={showWeekends}
                 />
               </div>
 
@@ -630,6 +767,7 @@ export function ResourceCalendar() {
                       open={openIds.has(project.id)}
                       onToggle={() => toggleOpen(project.id)}
                       assignments={visibleAssignments.filter((a) => a.projectId === project.id)}
+                      includeWeekends={showWeekends}
                     />
                   ))
                 : personList.map((entry) => (
@@ -639,8 +777,32 @@ export function ResourceCalendar() {
                       open={openIds.has(entry.id)}
                       onToggle={() => toggleOpen(entry.id)}
                       assignments={visibleAssignments.filter((a) => a.personId === entry.id)}
+                      includeWeekends={showWeekends}
                     />
                   ))}
+
+              {groupBy === 'projects' ? (
+                <CrewPanel
+                  open={crewOpen}
+                  onToggle={() => persistCrew(!crewOpen)}
+                  previewing={dragIds.size > 0}
+                  showAll={showAllCrew}
+                  onShowAll={() => setShowAllCrew((v) => !v)}
+                  crew={crewRows}
+                  visColumns={visColumns}
+                  columns={columns}
+                  colW={colW}
+                  draggingPersonId={draggingPersonId}
+                  hoursBefore={hoursBefore}
+                  issues={issues}
+                  finder={finder}
+                  onIssueClick={openFinder}
+                  onFinderNav={stepFinder}
+                  onFinderClose={() => setFinder(null)}
+                  shown={showAllCrew ? people.length : crewCounts.shown}
+                  total={crewCounts.total}
+                />
+              ) : null}
             </GanttContext.Provider>
             </div>
           </div>
@@ -660,39 +822,37 @@ export function ResourceCalendar() {
               <strong>{selected.length}</strong> bar{selected.length === 1 ? '' : 's'} selected
             </Text>
             <Button appearance="ghost" onClick={() => setSelected([])}>
-              Clear
+              Clear Selection
             </Button>
           </div>
-          {editable ? (
-            <div className="rc-bulk-bar-actions">
-              <Button
-                appearance="secondary"
-                icon={DeleteIcon}
-                onClick={() => {
-                  const ids = new Set(
-                    visibleAssignments
-                      .filter((a) => selectedKeys.has(a.id) || (a.phaseId != null && selectedKeys.has(a.phaseId)) || selectedKeys.has(`proj-${a.projectId}`))
-                      .map((a) => a.id),
-                  )
-                  setHidden((prev) => new Set([...prev, ...ids]))
-                  setSelected([])
-                  toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype.' })
-                }}
-              >
-                Delete
-              </Button>
-              <Button
-                appearance="secondary"
-                icon={EditIcon}
-                onClick={() => {
-                  setEditHours('8')
-                  setEditOpen(true)
-                }}
-              >
-                Edit
-              </Button>
-            </div>
-          ) : null}
+          <div className="rc-bulk-bar-actions">
+            <Button
+              appearance="secondary"
+              icon={EditIcon}
+              onClick={() => {
+                setEditHours('8')
+                setEditOpen(true)
+              }}
+            >
+              Edit hours
+            </Button>
+            <Button
+              appearance="secondary"
+              icon={DeleteIcon}
+              onClick={() => {
+                const ids = new Set(
+                  visibleAssignments
+                    .filter((a) => selectedKeys.has(a.id) || (a.phaseId != null && selectedKeys.has(a.phaseId)) || selectedKeys.has(`proj-${a.projectId}`))
+                    .map((a) => a.id),
+                )
+                setHidden((prev) => new Set([...prev, ...ids]))
+                setSelected([])
+                toast.danger({ title: 'Deleted', message: 'Selected assignments were removed from this prototype.' })
+              }}
+            >
+              Delete
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -726,6 +886,64 @@ export function ResourceCalendar() {
   )
 }
 
+function KeyPopover() {
+  return (
+    <Popover placement="bottom-end">
+      <Popover.Trigger>
+        {(props) => (
+          <Button size="small" appearance="ghost" {...props}>
+            Key
+          </Button>
+        )}
+      </Popover.Trigger>
+      <Popover.Content>
+        <div className="rc-key">
+          <Text>Key</Text>
+          <div className="rc-key-row">
+            <Icon svg={CalendarCheckIcon} size="small" inherit />
+            Confirmed
+          </div>
+          <div className="rc-key-row">
+            <span className="rc-key-swatch" style={{ background: '#fff', border: '1px solid #005132' }} />
+            Unassigned · Needs a tech
+          </div>
+          <div className="rc-key-row">
+            <Icon svg={WarningIcon} size="small" inherit />
+            Over capacity / conflict
+          </div>
+          <div className="rc-key-row">
+            <span style={{ color: '#d62100', fontWeight: 600 }}>Over budget</span>
+          </div>
+          <Text size="small" subdued>
+            Project colors
+          </Text>
+          <div className="rc-key-swatches">
+            {projects
+              .filter((p) => !p.leftover)
+              .map((p) => (
+                <Tooltip openOnHover key={p.id}>
+                  <Tooltip.Trigger>
+                    <span className="rc-key-swatch" style={{ background: tintFill(p.color), border: `1px solid ${p.ink}` }} />
+                  </Tooltip.Trigger>
+                  <Tooltip.Content>{p.name}</Tooltip.Content>
+                </Tooltip>
+              ))}
+          </div>
+          <div className="rc-key-row">
+            <span
+              className="rc-key-swatch"
+              style={{
+                backgroundImage: 'repeating-linear-gradient(-45deg, rgba(112,112,112,.2) 0 1px, transparent 1px 6px)',
+              }}
+            />
+            Weekend
+          </div>
+        </div>
+      </Popover.Content>
+    </Popover>
+  )
+}
+
 function TimelineHeader({
   zoom,
   columns,
@@ -733,6 +951,7 @@ function TimelineHeader({
   colW,
   firstVisible,
   weekGuideDay,
+  showWeekends,
 }: {
   zoom: Zoom
   columns: Column[]
@@ -740,6 +959,7 @@ function TimelineHeader({
   colW: number
   firstVisible: number
   weekGuideDay?: string
+  showWeekends: boolean
 }) {
   const minIndex = columns[0]?.index ?? 0
   const todayX = todayMarkerX(zoom, minIndex, colW)
@@ -747,6 +967,7 @@ function TimelineHeader({
   const bands = showMonthBand ? monthBands(columns) : yearBands(columns)
   const pinCol = visColumns.find((col) => col.index >= firstVisible) ?? visColumns[0]
   const pin = pinCol ? periodPinLabel(zoom, { start: pinCol.start, end: pinCol.end }) : ''
+  const hatch = zoom !== 'days' && showWeekends
 
   return (
     <div className="rc-head-timeline" style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}>
@@ -761,6 +982,13 @@ function TimelineHeader({
         <div className="rc-period-pin">{pin}</div>
       </div>
       <div className={`rc-cols${zoom === 'days' || zoom === 'weeks' ? ' is-dayweek' : ''}`}>
+        {hatch
+          ? visColumns.flatMap((col) =>
+              weekendSlices(col, minIndex, colW).map((slice) => (
+                <div key={`${col.id}-h-${slice.left}`} className="rc-hatch" style={{ left: slice.left, width: slice.width }} />
+              )),
+            )
+          : null}
         <div className="rc-today-line" style={{ left: todayX }} />
         {weekGuideDay ? (
           <div
@@ -773,7 +1001,7 @@ function TimelineHeader({
         ) : null}
         {visColumns.map((col) => (
           <div
-            className={`rc-col${col.weekend ? ' is-weekend' : ''}`}
+            className={`rc-col${zoom === 'days' && col.weekend ? ' is-weekend' : ''}`}
             data-col={col.id}
             key={col.id}
             style={{ ['--rc-i' as string]: col.index - minIndex }}
@@ -793,14 +1021,16 @@ function TimelineHeader({
               </>
             ) : zoom === 'weeks' ? (
               <>
-                <Text size="small" className="rc-col-dow">
-                  {col.label}
+                <Text size="small" subdued className="rc-col-dow">
+                  {col.sublabel}
                 </Text>
-                {col.sublabel ? (
-                  <Text size="small" subdued className="rc-col-num">
-                    {col.sublabel}
+                {col.today ? (
+                  <span className="rc-today-pill">{col.label}</span>
+                ) : (
+                  <Text size="small" className="rc-col-num">
+                    {col.label}
                   </Text>
-                ) : null}
+                )}
               </>
             ) : (
               <>
@@ -814,11 +1044,6 @@ function TimelineHeader({
             )}
           </div>
         ))}
-        {zoom === 'weeks' ? (
-          <span className="rc-today-pill rc-today-mark" style={{ left: todayX }}>
-            {todayDayNumber()}
-          </span>
-        ) : null}
         {zoom === 'months' || zoom === 'quarters' || zoom === 'year' ? (
           <span className="rc-today-chip rc-today-mark" style={{ left: todayX }}>
             Today
@@ -829,8 +1054,23 @@ function TimelineHeader({
   )
 }
 
-function durationBarLabel(project: Project) {
-  return hoursCaption(project.scheduledHours, project.budgetHours)
+function BudgetNums({
+  budget,
+  scheduled,
+  actual,
+}: {
+  budget?: number
+  scheduled?: number
+  actual?: number
+}) {
+  const over = hoursOver(scheduled, budget, actual)
+  return (
+    <div className="rc-gutter-nums">
+      <span className={over ? 'is-over' : undefined}>{displayHours(budget)}</span>
+      <span className={over ? 'is-over' : undefined}>{displayHours(scheduled)}</span>
+      <span className={over ? 'is-over' : undefined}>{displayHours(actual)}</span>
+    </div>
+  )
 }
 
 function ProjectBlock({
@@ -838,24 +1078,20 @@ function ProjectBlock({
   open,
   onToggle,
   assignments: rows,
+  includeWeekends,
 }: {
   project: Project
   open: boolean
   onToggle: () => void
   assignments: Assignment[]
+  includeWeekends: boolean
 }) {
   const { resolve, selectedKeys } = useGantt()
   const projectPhases = phases.filter((p) => p.projectId === project.id)
   const techs = [...new Set(rows.filter((r) => r.personId !== 'unassigned').map((r) => r.personId))]
   const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
-  const phaseHint = projectPhases
-    .map((phase) => {
-      const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
-      return cap ? `${phase.name} · ${cap}` : phase.name
-    })
-    .join(' · ')
-  const projectName = project.name.replace(' Tentative', '')
   const projectSpan = resolve(`proj-${project.id}`, project.start, project.end)
+  const barHours = project.scheduledHours ? `${project.scheduledHours}h` : undefined
 
   return (
     <>
@@ -865,27 +1101,17 @@ function ProjectBlock({
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
           <div className="rc-gutter-copy">
-            <Flex alignItems="center" gap="2">
-              {!open && phaseHint ? (
-                <Tooltip openOnHover>
-                  <Tooltip.Trigger>
-                    <Text>{projectName}</Text>
-                  </Tooltip.Trigger>
-                  <Tooltip.Content>{phaseHint}</Tooltip.Content>
-                </Tooltip>
-              ) : (
-                <Text>{projectName}</Text>
-              )}
-              {project.tentative ? <Chip size="small" label="Tentative" color="#ffbe00" /> : null}
-            </Flex>
-            <HoursReadout
-              scheduled={project.scheduledHours}
-              budget={project.budgetHours}
-              actual={project.actualHours}
-              fallback={project.hours ?? project.collapsedHours}
-              scope="project"
-            />
+            <Name title={project.name}>{project.name}</Name>
+            {projectOver ? <div className="rc-over-line">Over budget</div> : null}
+            {project.leftover && project.hours ? (
+              <Text size="small" subdued>
+                {project.hours}
+              </Text>
+            ) : null}
           </div>
+          {project.leftover ? null : (
+            <BudgetNums budget={project.budgetHours} scheduled={project.scheduledHours} actual={project.actualHours} />
+          )}
         </div>
         <Timeline>
           {project.leftover ? null : (
@@ -893,8 +1119,9 @@ function ProjectBlock({
               id={`proj-${project.id}`}
               span={projectSpan}
               color={project.color}
-              name={projectName}
-              hours={durationBarLabel(project)}
+              ink={project.ink}
+              name={project.name}
+              hours={barHours}
               scheduled={project.scheduledHours}
               budget={project.budgetHours}
               actual={project.actualHours}
@@ -906,28 +1133,25 @@ function ProjectBlock({
       {open
         ? projectPhases.map((phase) => {
             const span = resolve(phase.id, phase.start, phase.end, phase.offDays)
-            const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
             const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
+            const hours = phase.scheduledHours ? `${phase.scheduledHours}h` : undefined
             return (
               <div className={`rc-row rc-nested${over ? ' is-over' : ''}`} key={phase.id}>
                 <div className="rc-gutter">
                   <div className="rc-gutter-copy">
-                    <Text>{phase.name}</Text>
-                    <HoursReadout
-                      scheduled={phase.scheduledHours}
-                      budget={phase.budgetHours}
-                      actual={phase.actualHours}
-                      scope="phase"
-                    />
+                    <Name>{phase.name}</Name>
+                    {over ? <div className="rc-over-line">Over budget</div> : null}
                   </div>
+                  <BudgetNums budget={phase.budgetHours} scheduled={phase.scheduledHours} actual={phase.actualHours} />
                 </div>
                 <Timeline>
                   <SpanBar
                     id={phase.id}
                     span={span}
-                    color={phase.color}
+                    color={project.color}
+                    ink={project.ink}
                     name={phase.name}
-                    hours={cap}
+                    hours={hours}
                     scheduled={phase.scheduledHours}
                     budget={phase.budgetHours}
                     actual={phase.actualHours}
@@ -941,7 +1165,13 @@ function ProjectBlock({
       {open && !project.leftover ? <UnassignedRow rows={rows.filter((r) => r.kind === 'unassigned')} /> : null}
       {open && !project.leftover
         ? techs.map((personId) => (
-            <PersonAssignmentRow key={`${project.id}-${personId}`} personId={personId} projectId={project.id} rows={rows.filter((r) => r.personId === personId)} />
+            <PersonAssignmentRow
+              key={`${project.id}-${personId}`}
+              personId={personId}
+              projectId={project.id}
+              rows={rows.filter((r) => r.personId === personId)}
+              includeWeekends={includeWeekends}
+            />
           ))
         : null}
       {open && project.leftover
@@ -952,7 +1182,7 @@ function ProjectBlock({
                 <div className="rc-gutter">
                   <Avatar name={p.name} size="small" color={p.color} />
                   <div className="rc-gutter-copy">
-                    <Text>{p.name}</Text>
+                    <Name>{p.name}</Name>
                     <Text size="small" subdued>
                       {p.role}
                     </Text>
@@ -971,24 +1201,22 @@ function PersonBlock({
   open,
   onToggle,
   assignments: rows,
+  includeWeekends,
 }: {
   personId: string
   open: boolean
   onToggle: () => void
   assignments: Assignment[]
+  includeWeekends: boolean
 }) {
   const { viewWindow, resolve, zoom } = useGantt()
   const rangeLabel = formatWindowCaption(viewWindow)
   const person = personId === 'unassigned' ? undefined : personById(personId)
+  const resolved = assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
   const meta =
     personId === 'unassigned'
       ? { text: 'No technician', detail: rows.map((r) => r.label).join(' + '), over: false }
-      : personHoursInWindow(
-          personId,
-          assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
-          viewWindow,
-          rangeLabel,
-        )
+      : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
   const grouped = projects
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
     .map((p) => ({ project: p, rows: rows.filter((r) => r.projectId === p.id) }))
@@ -1000,9 +1228,15 @@ function PersonBlock({
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
-          {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
+          {person ? (
+            <Avatar name={person.name} size="small" color={person.color} />
+          ) : (
+            <span className="rc-person-unknown">
+              <Icon svg={PersonQuestionIcon} size="small" inherit />
+            </span>
+          )}
           <div className="rc-gutter-copy">
-            <Text>{person?.name ?? 'Unassigned'}</Text>
+            <Name>{person?.name ?? 'Unassigned'}</Name>
             <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
           </div>
         </div>
@@ -1016,8 +1250,8 @@ function PersonBlock({
                 <div className="rc-row rc-nested" key={row.id}>
                   <div className="rc-gutter">
                     <div className="rc-gutter-copy">
-                      <Text>{project.name.replace(' Tentative', '')}</Text>
-                      <Text size="small" subdued>
+                      <Name>{project.name}</Name>
+                      <Text size="small" subdued className="rc-truncate" title={zoomBarLabel(zoom, row)}>
                         {zoomBarLabel(zoom, row)}
                       </Text>
                     </div>
@@ -1038,7 +1272,7 @@ function HoursMeta({ text, detail, warn }: { text: string; detail?: string; warn
   return (
     <Tooltip openOnHover>
       <Tooltip.Trigger>
-        <Text size="small" className={warn ? 'rc-hours-warn' : undefined} subdued={!warn}>
+        <Text size="small" className={`rc-truncate${warn ? ' rc-hours-warn' : ''}`} subdued={!warn}>
           {text}
         </Text>
       </Tooltip.Trigger>
@@ -1047,18 +1281,16 @@ function HoursMeta({ text, detail, warn }: { text: string; detail?: string; warn
   )
 }
 
-function assignmentColor(row: Assignment, fallback: string) {
-  return phaseById(row.phaseId)?.color ?? fallback
-}
-
 function UnassignedRow({ rows }: { rows: Assignment[] }) {
   if (rows.length === 0) return null
   return (
     <div className="rc-row rc-nested is-packed">
       <div className="rc-gutter">
-        <Avatar name="Unassigned" size="small" />
+        <span className="rc-person-unknown">
+          <Icon svg={PersonQuestionIcon} size="small" inherit />
+        </span>
         <div className="rc-gutter-copy">
-          <Text>Unassigned</Text>
+          <Name>Unassigned</Name>
           <Text size="small" subdued>
             No technician · {rows.map((r) => r.label).join(' + ')}
           </Text>
@@ -1072,18 +1304,22 @@ function UnassignedRow({ rows }: { rows: Assignment[] }) {
 function PersonAssignmentRow({
   personId,
   rows,
+  includeWeekends,
 }: {
   personId: string
   projectId: string
   rows: Assignment[]
+  includeWeekends: boolean
 }) {
   const { viewWindow, resolve } = useGantt()
   const person = personById(personId)
+  const resolvedAll = assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
   const meta = personHoursInWindow(
     personId,
-    assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) })),
+    resolvedAll,
     viewWindow,
     formatWindowCaption(viewWindow),
+    includeWeekends,
   )
   if (!person) return null
   return (
@@ -1091,13 +1327,55 @@ function PersonAssignmentRow({
       <div className="rc-gutter">
         <Avatar name={person.name} size="small" color={person.color} />
         <div className="rc-gutter-copy">
-          <Text>{person.name}</Text>
+          <Name>{person.name}</Name>
           <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
         </div>
       </div>
       <PackedPersonBars rows={rows} personId={personId} showLabels />
     </div>
   )
+}
+
+type LayoutItem =
+  | { type: 'bar'; row: Assignment & Span; floatLabel?: boolean; colorOnly?: boolean }
+  | { type: 'chip'; id: string; rows: (Assignment & Span)[]; start: string; end: string }
+
+function layoutRowItems(rows: (Assignment & Span)[], zoom: Zoom, columns: Column[], colW: number): LayoutItem[] {
+  const colorOnlyZoom = zoom === 'quarters' || zoom === 'year'
+  if (colorOnlyZoom) {
+    return rows.map((row) => {
+      const box = barPixelBox(row.start, row.end, columns, colW)
+      return { type: 'bar' as const, row, colorOnly: box.widthPx < SHORT_BAR_PX }
+    })
+  }
+  const shortByWeek = new Map<number, (Assignment & Span)[]>()
+  const longs: (Assignment & Span)[] = []
+  for (const row of rows) {
+    const box = barPixelBox(row.start, row.end, columns, colW)
+    if (box.visible && box.widthPx < SHORT_BAR_PX) {
+      const week = weekIndexOf(row.start)
+      const list = shortByWeek.get(week) ?? []
+      list.push(row)
+      shortByWeek.set(week, list)
+    } else {
+      longs.push(row)
+    }
+  }
+  const items: LayoutItem[] = longs.map((row) => ({ type: 'bar', row }))
+  for (const [, group] of shortByWeek) {
+    if (group.length >= 2) {
+      items.push({
+        type: 'chip',
+        id: `chip:${group.map((g) => g.id).join('+')}`,
+        rows: group,
+        start: group.reduce((min, row) => (row.start < min ? row.start : min), group[0]!.start),
+        end: group.reduce((max, row) => (row.end > max ? row.end : max), group[0]!.end),
+      })
+    } else if (group[0]) {
+      items.push({ type: 'bar', row: group[0], floatLabel: true })
+    }
+  }
+  return items
 }
 
 function PackedPersonBars({
@@ -1109,24 +1387,42 @@ function PackedPersonBars({
   personId: string
   showLabels: boolean
 }) {
-  const { resolve } = useGantt()
+  const { resolve, zoom, columns, colW, showWeekends } = useGantt()
   const resolved = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-  const { laneById, laneCount } = packLanes(resolved)
+  const items = layoutRowItems(resolved, zoom, columns, colW)
+  const packedSource = items.map((item) =>
+    item.type === 'chip' ? { id: item.id, start: item.start, end: item.end } : { id: item.row.id, start: item.row.start, end: item.row.end },
+  )
+  const { laneById, laneCount } = packLanes(packedSource)
   const allForPerson = assignments
     .filter((row) => row.personId === personId)
     .map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-  const conflictIds = overCapacityAssignmentIds(personId, allForPerson)
+  const conflictIds = overCapacityAssignmentIds(personId, allForPerson, showWeekends)
   return (
     <Timeline packed lanes={laneCount}>
-      {resolved.map((row) => (
-        <AssignmentBar
-          key={row.id}
-          row={row}
-          showLabel={showLabels}
-          lane={laneById.get(row.id) ?? 0}
-          conflict={conflictIds.has(row.id)}
-        />
-      ))}
+      {items.map((item) =>
+        item.type === 'chip' ? (
+          <ShortChip
+            key={item.id}
+            id={item.id}
+            rows={item.rows}
+            start={item.start}
+            end={item.end}
+            lane={laneById.get(item.id) ?? 0}
+            conflict={item.rows.some((row) => conflictIds.has(row.id))}
+          />
+        ) : (
+          <AssignmentBar
+            key={item.row.id}
+            row={item.row}
+            showLabel={showLabels}
+            lane={laneById.get(item.row.id) ?? 0}
+            conflict={conflictIds.has(item.row.id)}
+            floatLabel={item.floatLabel}
+            colorOnly={item.colorOnly}
+          />
+        ),
+      )}
     </Timeline>
   )
 }
@@ -1136,40 +1432,152 @@ function AssignmentBar({
   showLabel,
   lane = 0,
   conflict,
+  floatLabel,
+  colorOnly,
 }: {
   row: Assignment & Span
   showLabel?: boolean
   lane?: number
   conflict?: boolean
+  floatLabel?: boolean
+  colorOnly?: boolean
 }) {
   const { zoom, selectedKeys } = useGantt()
   const parts = zoomBarParts(zoom, row)
-  const phase = phaseById(row.phaseId)
+  const project = projectById(row.projectId)
+  const address = assignmentAddress(row)
+  const clock = clockLabel(row)
+  const tip = [parts.name, clock, address, row.label].filter(Boolean)
   return (
     <SpanBar
       id={row.id}
       span={row}
-      color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
+      color={project?.color ?? '#6a7a85'}
+      ink={project?.ink ?? '#576671'}
       name={parts.name}
       hours={parts.hours}
       showLabel={showLabel}
-      scheduled={phase?.scheduledHours}
-      budget={phase?.budgetHours}
-      actual={phase?.actualHours}
       fallbackHours={row.label}
       confirmed={row.confirmed}
       unassigned={row.kind === 'unassigned'}
       selected={selectedKeys.has(row.id)}
       lane={lane}
       conflict={conflict}
+      floatLabel={floatLabel}
+      colorOnly={colorOnly}
+      tipLines={tip}
     />
   )
 }
 
+function ShortChip({
+  id,
+  rows,
+  start,
+  end,
+  lane,
+  conflict,
+}: {
+  id: string
+  rows: (Assignment & Span)[]
+  start: string
+  end: string
+  lane: number
+  conflict: boolean
+}) {
+  const { columns, editable, selectedKeys, dragIds, onBarClick, onBarPointerDown, onEditInWeek } = useGantt()
+  const project = projectById(rows[0]?.projectId ?? '')
+  const color = project?.color ?? '#6a7a85'
+  const ink = project?.ink ?? '#576671'
+  const hours = rows.reduce((sum, row) => sum + hoursTotal(row), 0)
+  const label = `${rows.length} bookings · ${hours}h`
+  const style = barStyle(start, end, columns)
+  if (!style.visible) return null
+  const selectedNow = rows.some((row) => selectedKeys.has(row.id)) && editable
+  const dragging = rows.some((row) => dragIds.has(row.id))
+  const [open, setOpen] = useState(false)
+
+  const inner = (
+    <div
+      role="button"
+      tabIndex={-1}
+      data-span={id}
+      className={`rc-bar${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
+      style={{
+        left: `calc(${style.left} + 3px)`,
+        width: `calc(${style.width} - 6px)`,
+        background: tintFill(color),
+        color: ink,
+        '--rc-lane': lane,
+        '--rc-bar-color': color,
+        '--rc-bar-ink': ink,
+      } as CSSProperties}
+      onClick={(event) => {
+        event.stopPropagation()
+        if (!dragging) setOpen(true)
+      }}
+      onPointerDown={(event) => {
+        if (!editable || event.button !== 0) return
+        const first = rows[0]
+        if (first) onBarPointerDown(event, first.id, first, 'move', rows.map((row) => row.id))
+      }}
+    >
+      <span className="rc-bar-label">
+        {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
+        <span className="rc-bar-name">{label}</span>
+      </span>
+    </div>
+  )
+
+  return (
+    <Popover placement="bottom" open={open || undefined} onClose={() => setOpen(false)} openOnHover>
+      <Popover.Trigger>
+        {(props) => {
+          const { ref, ...rest } = props
+          return (
+            <div {...rest} ref={ref as never} style={{ display: 'contents' }}>
+              {inner}
+            </div>
+          )
+        }}
+      </Popover.Trigger>
+      <Popover.Content>
+        <div className="rc-chip-pop">
+          <Text>
+            {label}
+          </Text>
+          {rows.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              className="rc-chip-item"
+              onClick={(event) => {
+                event.stopPropagation()
+                onBarClick(row.id)
+                setOpen(false)
+                if (!editable) onEditInWeek(row)
+              }}
+            >
+              <span>{assignmentLabel(row)}</span>
+              <span>
+                {formatDay(row.start)} · {row.label}
+              </span>
+            </button>
+          ))}
+          <Text size="small" subdued>
+            Click a row to select that booking
+          </Text>
+        </div>
+      </Popover.Content>
+    </Popover>
+  )
+}
+
 function Timeline({ children, packed, lanes = 1 }: { children?: ReactNode; packed?: boolean; lanes?: number }) {
-  const { columns, visColumns, colW, zoom, weekGuideDay } = useGantt()
+  const { columns, visColumns, colW, zoom, weekGuideDay, showWeekends } = useGantt()
   const minIndex = columns[0]?.index ?? 0
   const todayX = todayMarkerX(zoom, minIndex, colW)
+  const hatch = zoom === 'days' || showWeekends
   const style = {
     ['--rc-cols' as string]: String(columns.length),
     ['--rc-col-w' as string]: `${colW}px`,
@@ -1179,11 +1587,18 @@ function Timeline({ children, packed, lanes = 1 }: { children?: ReactNode; packe
     <div className={`rc-timeline${packed ? ' is-packed' : ''}`} style={style}>
       {visColumns.map((col) => (
         <div
-          className={`rc-cell${col.weekend ? ' is-weekend' : ''}`}
+          className={`rc-cell${zoom === 'days' && col.weekend ? ' is-weekend' : ''}`}
           key={col.id}
           style={{ ['--rc-i' as string]: col.index - minIndex }}
         />
       ))}
+      {hatch && zoom !== 'days'
+        ? visColumns.flatMap((col) =>
+            weekendSlices(col, minIndex, colW).map((slice) => (
+              <div key={`${col.id}-h-${slice.left}`} className="rc-hatch" style={{ left: slice.left, width: slice.width }} />
+            )),
+          )
+        : null}
       <div className="rc-today-line" style={{ left: todayX }} />
       {weekGuideDay ? (
         <div
@@ -1203,36 +1618,42 @@ function SpanBar({
   id,
   span,
   color,
+  ink,
   name,
   hours,
   scheduled,
   budget,
   actual,
   fallbackHours,
-  thin,
   confirmed,
   unassigned,
   selected,
   lane = 0,
   conflict,
   showLabel = true,
+  floatLabel,
+  colorOnly,
+  tipLines,
 }: {
   id: string
   span: Span
   color: string
+  ink: string
   name?: string
   hours?: string
   scheduled?: number
   budget?: number
   actual?: number
   fallbackHours?: string
-  thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
   selected?: boolean
   lane?: number
   conflict?: boolean
   showLabel?: boolean
+  floatLabel?: boolean
+  colorOnly?: boolean
+  tipLines?: string[]
 }) {
   const { zoom, columns, dragIds, editable, onBarClick, onBarPointerDown } = useGantt()
   const segs = activeSegments(span.start, span.end, span.offDays)
@@ -1247,10 +1668,10 @@ function SpanBar({
           span={span}
           seg={seg}
           color={color}
+          ink={ink}
           name={name}
           hours={hours}
           hoursLine={hoursLine}
-          thin={thin}
           confirmed={confirmed}
           unassigned={unassigned}
           selected={selected}
@@ -1264,6 +1685,9 @@ function SpanBar({
           dragging={dragIds.has(id)}
           onBarClick={onBarClick}
           onBarPointerDown={onBarPointerDown}
+          floatLabel={floatLabel}
+          colorOnly={colorOnly}
+          tipLines={tipLines}
         />
       ))}
     </>
@@ -1275,10 +1699,10 @@ function BarSegment({
   span,
   seg,
   color,
+  ink,
   name,
   hours,
   hoursLine,
-  thin,
   confirmed,
   unassigned,
   selected,
@@ -1292,15 +1716,18 @@ function BarSegment({
   dragging,
   onBarClick,
   onBarPointerDown,
+  floatLabel,
+  colorOnly,
+  tipLines,
 }: {
   id: string
   span: Span
   seg: { start: string; end: string }
   color: string
+  ink: string
   name?: string
   hours?: string
   hoursLine?: string
-  thin?: boolean
   confirmed?: boolean
   unassigned?: boolean
   selected?: boolean
@@ -1312,8 +1739,11 @@ function BarSegment({
   wholeBar: boolean
   editable: boolean
   dragging: boolean
-  onBarClick: (id: string, additive?: boolean) => void
-  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
+  onBarClick: (id: string, mods?: ClickMods) => void
+  onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode, extraIds?: string[]) => void
+  floatLabel?: boolean
+  colorOnly?: boolean
+  tipLines?: string[]
 }) {
   const { clipLeft, viewPx, colW, onEditInWeek } = useGantt()
   const [popOpen, setPopOpen] = useState(false)
@@ -1328,36 +1758,49 @@ function BarSegment({
   const clipped = leftPx < viewLeft - 1 && rightPx > viewLeft
   const shift = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
   const vis = Math.min(rightPx, viewLeft + viewPx) - Math.max(leftPx, viewLeft)
-  const showHours = Boolean(showLabel && hours) && vis > 96
+  const showHours = Boolean(showLabel && hours) && vis > 96 && !floatLabel && !colorOnly
   const dates = formatRange(seg.start, seg.end)
-  const tooltip = [name, hoursLine, dates].filter(Boolean).join('\n')
-  const selectedNow = Boolean(selected && editable)
+  const tooltip = [...(tipLines ?? [name, hoursLine]), dates].filter(Boolean).join('\n')
+  const selectedNow = Boolean(selected && (editable || selected))
+  const hideInner = Boolean(colorOnly || (floatLabel && !unassigned))
+  const overflowRight = leftPx + widthPx + 96 > viewLeft + viewPx
+  const fill = unassigned ? '#fff' : tintFill(color)
 
-  const barClass = `rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selectedNow ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`
+  const barClass = `rc-bar${unassigned ? ' is-unassigned' : ''}${selectedNow ? ' is-selected' : ''}${sliver || colorOnly ? ' is-sliver' : ''}${colorOnly ? ' is-color-only' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}${floatLabel ? ' is-short-float' : ''}`
   const barStyleVars = {
     left: `calc(${style.left} + 3px)`,
     width: `calc(${style.width} - 6px)`,
-    background: unassigned ? undefined : color,
-    color: unassigned ? undefined : contrastText(color),
+    background: fill,
+    color: ink,
     '--rc-lane': lane,
     '--rc-bar-color': color,
+    '--rc-bar-ink': ink,
     '--rc-label-shift': `${shift}px`,
   } as CSSProperties
 
-  const check =
-    (confirmed || selectedNow) && !thin && !sliver ? <Icon svg={CheckIcon} size="small" inherit /> : null
   const inner = (
     <>
-      {!thin && showLabel && (name || hours) && !sliver ? (
+      {!hideInner && showLabel && (name || hours) && !sliver ? (
         <span className="rc-bar-label">
+          {unassigned ? <Icon svg={PersonQuestionIcon} size="small" inherit /> : null}
+          {confirmed ? <Icon svg={CalendarCheckIcon} size="small" inherit /> : null}
+          {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
           {name ? <span className="rc-bar-name">{name}</span> : null}
           {showHours && hours ? <span className="rc-bar-hours">{hours}</span> : null}
-          {check}
         </span>
       ) : (
-        check
+        <>
+          {unassigned && !colorOnly ? <Icon svg={PersonQuestionIcon} size="small" inherit /> : null}
+          {confirmed && !colorOnly ? <Icon svg={CalendarCheckIcon} size="small" inherit /> : null}
+        </>
       )}
-      {editable && wholeBar && !thin ? (
+      {floatLabel && showLabel ? (
+        <span className={`rc-float-label${overflowRight ? ' is-left' : ''}`}>
+          {name}
+          {hours ? ` ${hours}` : ''}
+        </span>
+      ) : null}
+      {editable && wholeBar && !colorOnly && !floatLabel ? (
         <span
           className="rc-bar-handle"
           onPointerDown={(event) => {
@@ -1387,6 +1830,7 @@ function BarSegment({
                   ref={ref as never}
                   role="button"
                   tabIndex={-1}
+                  data-span={id}
                   className={barClass}
                   style={barStyleVars}
                   onClick={(event) => {
@@ -1405,7 +1849,12 @@ function BarSegment({
         <Popover.Content>
           <div className="rc-bar-pop">
             {name ? <Text>{name}</Text> : null}
-            {hoursLine ? <Text size="small">{hoursLine}</Text> : null}
+            {tipLines?.slice(1).map((line) => (
+              <Text size="small" key={line}>
+                {line}
+              </Text>
+            ))}
+            {hoursLine && !tipLines ? <Text size="small">{hoursLine}</Text> : null}
             <Text size="small" subdued>
               {dates}
             </Text>
@@ -1424,11 +1873,12 @@ function BarSegment({
         <div
           role="button"
           tabIndex={-1}
+          data-span={id}
           className={barClass}
           style={barStyleVars}
           onClick={(event) => {
             event.stopPropagation()
-            if (!dragging) onBarClick(id, event.shiftKey)
+            if (!dragging) onBarClick(id, event)
           }}
           onPointerDown={(event) => {
             if (!editable || event.button !== 0) return
@@ -1447,14 +1897,4 @@ function BarSegment({
       <Tooltip.Content>{tooltip}</Tooltip.Content>
     </Tooltip>
   )
-}
-
-function contrastText(bg: string) {
-  const hex = bg.replace('#', '')
-  if (hex.length !== 6) return '#040404'
-  const r = parseInt(hex.slice(0, 2), 16)
-  const g = parseInt(hex.slice(2, 4), 16)
-  const b = parseInt(hex.slice(4, 6), 16)
-  const yiq = (r * 299 + g * 587 + b * 114) / 1000
-  return yiq >= 160 ? '#040404' : '#ffffff'
 }
