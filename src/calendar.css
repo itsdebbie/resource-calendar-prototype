@@ -330,8 +330,7 @@
   height: auto;
 }
 
-.rc-row.is-packed .rc-gutter,
-.rc-row.is-packed .rc-timeline {
+.rc-row.is-packed .rc-gutter {
   height: auto;
   min-height: var(--rc-row-h);
 }

@@ -1305,6 +1305,7 @@ function BarSegment({
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode) => void
 }) {
   const { clipLeft, viewPx, colW, onEditInWeek } = useGantt()
+  const [popOpen, setPopOpen] = useState(false)
   const style = barStyle(seg.start, seg.end, columns)
   if (!style.visible) return null
   const sliver = segmentIsSliver(seg.start, seg.end, zoom)
@@ -1312,11 +1313,10 @@ function BarSegment({
   const leftPx = worldXForDate(zoom, minIndex, colW, seg.start) + 3
   const rightPx = worldXForDate(zoom, minIndex, colW, addDays(seg.end, 1)) - 3
   const widthPx = Math.max(4, rightPx - leftPx)
-  const pad = 8
-  const clipped = leftPx < clipLeft + pad && rightPx > clipLeft
-  const shift = clipped ? Math.min(Math.max(0, clipLeft + pad - leftPx), Math.max(0, widthPx - 12)) : 0
+  const clipped = leftPx < clipLeft && rightPx > clipLeft
+  const shift = clipped ? Math.min(Math.max(0, clipLeft - leftPx), Math.max(0, widthPx - 12)) : 0
   const vis = Math.min(rightPx, clipLeft + viewPx) - Math.max(leftPx, clipLeft)
-  const showHours = Boolean(showLabel && hours) && vis - (clipped ? pad : 0) > 96
+  const showHours = Boolean(showLabel && hours) && vis > 96
   const dates = formatRange(seg.start, seg.end)
   const tooltip = [name, hoursLine, dates].filter(Boolean).join('\n')
   const selectedNow = Boolean(selected && editable)
@@ -1355,12 +1355,16 @@ function BarSegment({
 
   if (!editable) {
     return (
-      <Popover placement="top">
+      <Popover
+        placement="bottom"
+        onOpenAnimationStart={() => setPopOpen(true)}
+        onClose={() => setPopOpen(false)}
+      >
         <Popover.Trigger>
           {(props) => {
             const { ref, onClick, ...rest } = props
             return (
-            <Tooltip openOnHover delay={400} placement="top">
+            <Tooltip openOnHover delay={400} placement="top" open={popOpen ? false : undefined}>
               <Tooltip.Trigger>
                 <div
                   {...rest}
