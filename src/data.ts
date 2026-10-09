@@ -375,7 +375,7 @@ export function personHoursInWindow(personId: string, rows: Assignment[], window
     booked: bookedR,
     cap: capR,
     over: capR > 0 && bookedR > capR,
-    text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h`,
+    text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h in view`,
     detail:
       personId === 'unassigned'
         ? names.join(' + ')

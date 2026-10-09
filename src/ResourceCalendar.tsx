@@ -49,21 +49,23 @@ import {
   isoFromTs,
   activeSegments,
   barStyle,
-  contextLabel as contextCaption,
   diffDays,
   emptySpan,
   formatDay,
   formatMoveRange,
   formatRange,
+  formatWindowCaption,
   isDayZoom,
   isEditableZoom,
   monthBands,
   moveOneDay,
-  packLanes,
+  periodPinLabel,
   resizeSpanEnd,
   segmentIsSliver,
   shiftSpan,
+  todayDayNumber,
   worldXForDate,
+  yearBands,
   zoomStep,
   type Column,
   type Span,
@@ -124,11 +126,13 @@ function HoursReadout({
   budget,
   actual,
   fallback,
+  scope = 'project',
 }: {
   scheduled?: number
   budget?: number
   actual?: number
   fallback?: string
+  scope?: 'project' | 'phase'
 }) {
   if (scheduled == null || budget == null) {
     return fallback ? (
@@ -139,17 +143,25 @@ function HoursReadout({
   }
   const over = hoursOver(scheduled, budget, actual)
   const pct = budget > 0 ? Math.min(100, (scheduled / budget) * 100) : 0
+  const caption = hoursCaption(scheduled, budget)
+  const kind = scope === 'phase' ? 'phase' : 'project'
+  const tip = `Whole-${kind} total: ${scheduled} scheduled / ${budget} budget · ${actual ?? 0} actual. Not limited to the visible dates.`
   return (
-    <div className="rc-hours">
-      {scheduled > 0 ? (
-        <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
-          <span style={{ width: `${pct}%` }} />
+    <Tooltip openOnHover>
+      <Tooltip.Trigger>
+        <div className="rc-hours">
+          {scheduled > 0 ? (
+            <div className={`rc-meter${over ? ' is-over' : ''}`} aria-hidden>
+              <span style={{ width: `${pct}%` }} />
+            </div>
+          ) : null}
+          <Text size="small" className={`rc-hours-label${over ? ' is-over' : ''}`} subdued={!over}>
+            {caption} {kind}
+          </Text>
         </div>
-      ) : null}
-      <Text size="small" className={`rc-hours-label${over ? ' is-over' : ''}`} subdued={!over}>
-        {hoursCaption(scheduled, budget)} · {actual ?? 0}h actual
-      </Text>
-    </div>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{tip}</Tooltip.Content>
+    </Tooltip>
   )
 }
 
@@ -438,14 +450,8 @@ export function ResourceCalendar() {
     onBarPointerDown,
   }
 
-  const hintCopy =
-    zoom === 'days'
-      ? 'Click a bar · drag a day · Shift-click to add'
-      : zoom === 'weeks'
-        ? 'Click a bar · drag or resize · Shift-click to add'
-        : 'Click a bar to select · editing is Days and Weeks only'
-
   const canZoomIn = zoom !== 'days'
+  const hoursFor = formatWindowCaption(viewWindow)
   const canZoomOut = zoom !== 'year'
 
   return (
@@ -545,7 +551,6 @@ export function ResourceCalendar() {
                     }
                   />
                 ))}
-              <Chip size="small" label={hintCopy} />
             </div>
           </Flex>
 
@@ -568,14 +573,21 @@ export function ResourceCalendar() {
             <GanttContext.Provider value={gantt}>
               <div className="rc-grid-head">
                 <div className="rc-gutter-head">
-                  <Flex direction="column" gap="1">
-                    <Text size="small">{groupBy === 'projects' ? 'Project · Hours' : 'Person · Hours'}</Text>
-                    <Text size="small" className="rc-context-label">
-                      {timeline.contextLabel || contextCaption(zoom, viewWindow)}
+                  <div className="rc-gutter-copy">
+                    <Text>{groupBy === 'projects' ? 'Projects' : 'People'}</Text>
+                    <Text size="small" subdued>
+                      Hours for {hoursFor}
                     </Text>
-                  </Flex>
+                  </div>
                 </div>
-                <TimelineHeader zoom={zoom} columns={columns} visColumns={visColumns} colW={colW} weekGuideDay={gantt.weekGuideDay} />
+                <TimelineHeader
+                  zoom={zoom}
+                  columns={columns}
+                  visColumns={visColumns}
+                  colW={colW}
+                  viewWindow={viewWindow}
+                  weekGuideDay={gantt.weekGuideDay}
+                />
               </div>
 
               {groupBy === 'projects'
@@ -687,32 +699,36 @@ function TimelineHeader({
   columns,
   visColumns,
   colW,
+  viewWindow,
   weekGuideDay,
 }: {
   zoom: Zoom
   columns: Column[]
   visColumns: Column[]
   colW: number
+  viewWindow: TimeWindow
   weekGuideDay?: string
 }) {
-  const showMonthBand = zoom === 'days' || zoom === 'weeks'
   const minIndex = columns[0]?.index ?? 0
+  const todayX = worldXForDate(zoom, minIndex, colW, DEMO_TODAY)
+  const showMonthBand = zoom === 'days' || zoom === 'weeks'
+  const bands = showMonthBand ? monthBands(columns) : yearBands(columns)
+  const pin = periodPinLabel(zoom, viewWindow)
+
   return (
     <div className="rc-head-timeline" style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}>
-      {showMonthBand ? (
-        <div className="rc-month-band">
-          {monthBands(columns).map((band) => (
-            <div
-              className="rc-month-cell"
-              key={band.id}
-              style={{ left: (band.startIndex - minIndex) * colW, width: colW * band.span }}
-            >
-              <span>{band.label}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <div className="rc-month-band">
+        {bands.map((band) => (
+          <div
+            className="rc-month-cell"
+            key={band.id}
+            style={{ left: (band.startIndex - minIndex) * colW, width: colW * band.span }}
+          />
+        ))}
+        <div className="rc-period-pin">{pin}</div>
+      </div>
       <div className="rc-cols">
+        <div className="rc-today-line" style={{ left: todayX }} />
         {weekGuideDay ? (
           <div
             className="rc-day-guide"
@@ -724,7 +740,7 @@ function TimelineHeader({
         ) : null}
         {visColumns.map((col) => (
           <div
-            className={`rc-col${col.today ? ' is-today' : ''}${col.weekend ? ' is-weekend' : ''}`}
+            className={`rc-col${col.weekend ? ' is-weekend' : ''}`}
             data-col={col.id}
             key={col.id}
             style={{ ['--rc-i' as string]: col.index - minIndex }}
@@ -734,7 +750,7 @@ function TimelineHeader({
                 <Text size="small" subdued>
                   {col.sublabel}
                 </Text>
-                <Text size="small">{col.label}</Text>
+                {col.today ? <span className="rc-today-pill">{col.label}</span> : <Text size="small">{col.label}</Text>}
               </>
             ) : (
               <>
@@ -748,6 +764,16 @@ function TimelineHeader({
             )}
           </div>
         ))}
+        {zoom === 'weeks' ? (
+          <span className="rc-today-pill rc-today-mark" style={{ left: todayX }}>
+            {todayDayNumber()}
+          </span>
+        ) : null}
+        {zoom === 'months' || zoom === 'quarters' || zoom === 'year' ? (
+          <span className="rc-today-chip rc-today-mark" style={{ left: todayX }}>
+            Today
+          </span>
+        ) : null}
       </div>
     </div>
   )
@@ -768,11 +794,9 @@ function ProjectBlock({
   onToggle: () => void
   assignments: Assignment[]
 }) {
-  const { viewWindow, resolve, selectedKeys } = useGantt()
+  const { resolve, selectedKeys } = useGantt()
   const projectPhases = phases.filter((p) => p.projectId === project.id)
   const techs = [...new Set(rows.filter((r) => r.personId !== 'unassigned').map((r) => r.personId))]
-  const phaseSpans = projectPhases.map((phase) => ({ ...phase, ...resolve(phase.id, phase.start, phase.end, phase.offDays) }))
-  const sparkline = packLanes(phaseSpans, viewWindow)
   const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
   const phaseHint = projectPhases
     .map((phase) => {
@@ -785,12 +809,12 @@ function ProjectBlock({
 
   return (
     <>
-      <div className={`rc-row is-group${projectOver ? ' is-over' : ''}${sparkline.laneCount > 1 ? ' is-stacked' : ''}`}>
+      <div className={`rc-row is-group${projectOver ? ' is-over' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
-          <Flex direction="column" className="rc-gutter-copy">
+          <div className="rc-gutter-copy">
             <Flex alignItems="center" gap="2">
               {!open && phaseHint ? (
                 <Tooltip openOnHover>
@@ -808,44 +832,61 @@ function ProjectBlock({
               scheduled={project.scheduledHours}
               budget={project.budgetHours}
               actual={project.actualHours}
-              fallback={open ? project.hours : project.collapsedHours}
+              fallback={project.hours ?? project.collapsedHours}
+              scope="project"
             />
-          </Flex>
+          </div>
         </div>
-        <Timeline packed={projectPhases.length > 0 ? sparkline : undefined} thin={!open}>
-          {project.leftover ? null : projectPhases.length > 0 ? (
-            phaseSpans.map((phase) => {
-              const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
-              const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
-              return (
-                <SpanBar
-                  key={phase.id}
-                  id={phase.id}
-                  span={phase}
-                  color={phase.color}
-                  label={open ? (cap ? `${phase.name} · ${cap}` : phase.name) : undefined}
-                  thin={!open}
-                  selected={selectedKeys.has(phase.id)}
-                  lane={sparkline.laneById.get(phase.id) ?? 0}
-                  hint={`${phase.name} · ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual${over ? ' · over budget' : ''}`}
-                />
-              )
-            })
-          ) : (
+        <Timeline>
+          {project.leftover ? null : (
             <SpanBar
               id={`proj-${project.id}`}
               span={projectSpan}
               color={project.color}
-              label={open ? durationBarLabel(project) : undefined}
-              thin={!open}
+              label={durationBarLabel(project)}
               selected={selectedKeys.has(`proj-${project.id}`)}
+              hint={`${projectName} · whole-project ${hoursCaption(project.scheduledHours, project.budgetHours) ?? ''} · ${project.actualHours ?? 0} actual`}
             />
           )}
         </Timeline>
       </div>
+      {open
+        ? projectPhases.map((phase) => {
+            const span = resolve(phase.id, phase.start, phase.end, phase.offDays)
+            const cap = hoursCaption(phase.scheduledHours, phase.budgetHours)
+            const over = hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)
+            return (
+              <div className={`rc-row rc-nested${over ? ' is-over' : ''}`} key={phase.id}>
+                <div className="rc-gutter">
+                  <div className="rc-gutter-copy">
+                    <Text>{phase.name}</Text>
+                    <HoursReadout
+                      scheduled={phase.scheduledHours}
+                      budget={phase.budgetHours}
+                      actual={phase.actualHours}
+                      scope="phase"
+                    />
+                  </div>
+                </div>
+                <Timeline>
+                  <SpanBar
+                    id={phase.id}
+                    span={span}
+                    color={phase.color}
+                    label={cap ? `${phase.name} · ${cap}` : phase.name}
+                    selected={selectedKeys.has(phase.id)}
+                    hint={`${phase.name} · whole-phase ${phase.scheduledHours} scheduled / ${phase.budgetHours} budget · ${phase.actualHours} actual`}
+                  />
+                </Timeline>
+              </div>
+            )
+          })
+        : null}
       {open && !project.leftover ? <UnassignedRow rows={rows.filter((r) => r.kind === 'unassigned')} /> : null}
       {open && !project.leftover
-        ? techs.map((personId) => <PersonAssignmentRow key={`${project.id}-${personId}`} personId={personId} projectId={project.id} rows={rows.filter((r) => r.personId === personId)} />)
+        ? techs.map((personId) => (
+            <PersonAssignmentRow key={`${project.id}-${personId}`} personId={personId} projectId={project.id} rows={rows.filter((r) => r.personId === personId)} />
+          ))
         : null}
       {open && project.leftover
         ? people
@@ -854,12 +895,12 @@ function ProjectBlock({
               <div className="rc-row rc-nested" key={p.id}>
                 <div className="rc-gutter">
                   <Avatar name={p.name} size="small" color={p.color} />
-                  <Flex direction="column">
+                  <div className="rc-gutter-copy">
                     <Text>{p.name}</Text>
                     <Text size="small" subdued>
                       {p.role}
                     </Text>
-                  </Flex>
+                  </div>
                 </div>
                 <Timeline />
               </div>
@@ -894,22 +935,21 @@ function PersonBlock({
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
     .map((p) => ({ project: p, rows: rows.filter((r) => r.projectId === p.id) }))
   const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-  const packed = packLanes(resolvedRows, viewWindow)
 
   return (
     <>
-      <div className={`rc-row is-group ${meta.over ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
+      <div className={`rc-row is-group ${meta.over ? 'is-over' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={onToggle} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
           </button>
           {person ? <Avatar name={person.name} size="small" color={person.color} /> : <Avatar name="Unassigned" size="small" />}
-          <Flex direction="column" className="rc-gutter-copy">
+          <div className="rc-gutter-copy">
             <Text>{person?.name ?? 'Unassigned'}</Text>
             <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
-          </Flex>
+          </div>
         </div>
-        <Timeline packed={packed} thin={open}>
+        <Timeline>
           {resolvedRows.map((row) => (
             <SpanBar
               key={row.id}
@@ -917,47 +957,42 @@ function PersonBlock({
               span={row}
               color={assignmentColor(row, projectById(row.projectId)?.color ?? '#8b8b8b')}
               label={open ? undefined : zoomBarLabel(zoom, row)}
-              thin={open}
               confirmed={row.confirmed}
               unassigned={row.kind === 'unassigned'}
               selected={selectedKeys.has(row.id)}
-              lane={packed.laneById.get(row.id) ?? 0}
             />
           ))}
         </Timeline>
       </div>
       {open
-        ? grouped.map(({ project, rows: projectRows }) => {
-            const nestedRows = projectRows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-            const nested = packLanes(nestedRows, viewWindow)
-            return (
-              <div className={`rc-row rc-nested${nested.laneCount > 1 ? ' is-stacked' : ''}`} key={project.id}>
-                <div className="rc-gutter">
-                  <Flex direction="column" className="rc-gutter-copy">
-                    <Text>{project.name.replace(' Tentative', '')}</Text>
-                    <Text size="small" subdued>
-                      {projectRows.map((r) => r.label).join(' + ')}
-                    </Text>
-                  </Flex>
-                </div>
-                <Timeline packed={nested}>
-                  {nestedRows.map((row) => (
+        ? grouped.map(({ project, rows: projectRows }) =>
+            projectRows.map((row) => {
+              const span = resolve(row.id, row.start, row.end, row.offDays)
+              return (
+                <div className="rc-row rc-nested" key={row.id}>
+                  <div className="rc-gutter">
+                    <div className="rc-gutter-copy">
+                      <Text>{project.name.replace(' Tentative', '')}</Text>
+                      <Text size="small" subdued>
+                        {zoomBarLabel(zoom, row)}
+                      </Text>
+                    </div>
+                  </div>
+                  <Timeline>
                     <SpanBar
-                      key={row.id}
                       id={row.id}
-                      span={row}
+                      span={span}
                       color={assignmentColor(row, project.color)}
                       label={zoomBarLabel(zoom, row)}
                       confirmed={row.confirmed}
                       unassigned={row.kind === 'unassigned'}
                       selected={selectedKeys.has(row.id)}
-                      lane={nested.laneById.get(row.id) ?? 0}
                     />
-                  ))}
-                </Timeline>
-              </div>
-            )
-          })
+                  </Timeline>
+                </div>
+              )
+            }),
+          )
         : null}
     </>
   )
@@ -993,22 +1028,21 @@ function assignmentColor(row: Assignment, fallback: string) {
 }
 
 function UnassignedRow({ rows }: { rows: Assignment[] }) {
-  const { viewWindow, zoom, resolve, selectedKeys } = useGantt()
+  const { zoom, resolve, selectedKeys } = useGantt()
   const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-  const packed = packLanes(resolvedRows, viewWindow)
   if (rows.length === 0) return null
   return (
-    <div className={`rc-row rc-nested${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
+    <div className="rc-row rc-nested">
       <div className="rc-gutter">
         <Avatar name="Unassigned" size="small" />
-        <Flex direction="column" className="rc-gutter-copy">
+        <div className="rc-gutter-copy">
           <Text>Unassigned</Text>
           <Text size="small" subdued>
             No technician · {rows.map((r) => r.label).join(' + ')}
           </Text>
-        </Flex>
+        </div>
       </div>
-      <Timeline packed={packed}>
+      <Timeline>
         {resolvedRows.map((row) => (
           <SpanBar
             key={row.id}
@@ -1018,7 +1052,6 @@ function UnassignedRow({ rows }: { rows: Assignment[] }) {
             label={zoomBarLabel(zoom, row)}
             unassigned
             selected={selectedKeys.has(row.id)}
-            lane={packed.laneById.get(row.id) ?? 0}
           />
         ))}
       </Timeline>
@@ -1043,18 +1076,17 @@ function PersonAssignmentRow({
     viewWindow,
   )
   const resolvedRows = rows.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
-  const packed = packLanes(resolvedRows, viewWindow)
   if (!person) return null
   return (
-    <div className={`rc-row rc-nested ${meta.over ? 'is-over' : ''}${packed.laneCount > 1 ? ' is-stacked' : ''}`}>
+    <div className={`rc-row rc-nested ${meta.over ? 'is-over' : ''}`}>
       <div className="rc-gutter">
         <Avatar name={person.name} size="small" color={person.color} />
-        <Flex direction="column" className="rc-gutter-copy">
+        <div className="rc-gutter-copy">
           <Text>{person.name}</Text>
           <HoursMeta text={meta.text} detail={meta.detail} danger={meta.over} />
-        </Flex>
+        </div>
       </div>
-      <Timeline packed={packed}>
+      <Timeline>
         {resolvedRows.map((row) => (
           <SpanBar
             key={row.id}
@@ -1064,7 +1096,6 @@ function PersonAssignmentRow({
             label={zoomBarLabel(zoom, row)}
             confirmed={row.confirmed}
             selected={selectedKeys.has(row.id)}
-            lane={packed.laneById.get(row.id) ?? 0}
           />
         ))}
       </Timeline>
@@ -1072,31 +1103,24 @@ function PersonAssignmentRow({
   )
 }
 
-function Timeline({
-  packed,
-  thin,
-  children,
-}: {
-  packed?: { laneCount: number }
-  thin?: boolean
-  children?: ReactNode
-}) {
+function Timeline({ children }: { children?: ReactNode }) {
   const { columns, visColumns, colW, zoom, weekGuideDay } = useGantt()
   const minIndex = columns[0]?.index ?? 0
+  const todayX = worldXForDate(zoom, minIndex, colW, DEMO_TODAY)
   const style = {
-    ['--rc-lanes' as string]: String(packed?.laneCount ?? 1),
     ['--rc-cols' as string]: String(columns.length),
     ['--rc-col-w' as string]: `${colW}px`,
   } as CSSProperties
   return (
-    <div className={`rc-timeline${thin ? ' is-thin' : ''}${(packed?.laneCount ?? 1) <= 1 ? ' is-single' : ''}`} style={style}>
+    <div className="rc-timeline" style={style}>
       {visColumns.map((col) => (
         <div
-          className={`rc-cell${col.weekend ? ' is-weekend' : ''}${col.today ? ' is-today' : ''}`}
+          className={`rc-cell${col.weekend ? ' is-weekend' : ''}`}
           key={col.id}
           style={{ ['--rc-i' as string]: col.index - minIndex }}
         />
       ))}
+      <div className="rc-today-line" style={{ left: todayX }} />
       {weekGuideDay ? (
         <div
           className="rc-day-guide"

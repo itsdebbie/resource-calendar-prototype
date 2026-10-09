@@ -1,11 +1,22 @@
 .rc-root {
+  --rc-space-1: 4px;
+  --rc-space-2: 8px;
+  --rc-space-3: 12px;
+  --rc-space-4: 16px;
+  --rc-gutter: 280px;
+  --rc-bar-h: 24px;
+  --rc-bar-r: 4px;
+  --rc-row-h: 48px;
+  --rc-head-band: 22px;
+  --rc-head-cols: 40px;
+  --rc-today: var(--a2-status-color-info, #0265dc);
   min-width: 0;
   width: 100%;
   max-width: 100%;
 }
 
 .rc-toolbar {
-  padding: 8px 12px 12px;
+  padding: var(--rc-space-2) var(--rc-space-3) var(--rc-space-3);
   min-width: 0;
   max-width: 100%;
 }
@@ -14,7 +25,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
+  gap: var(--rc-space-2) var(--rc-space-4);
   min-width: 0;
   max-width: 100%;
 }
@@ -23,7 +34,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--rc-space-2);
   min-width: 0;
 }
 
@@ -68,7 +79,7 @@
 .rc-grid-head,
 .rc-row {
   display: grid;
-  grid-template-columns: 280px max-content;
+  grid-template-columns: var(--rc-gutter) max-content;
   width: max-content;
   min-width: 100%;
 }
@@ -76,9 +87,9 @@
 .rc-cols,
 .rc-timeline {
   --rc-lanes: 1;
-  --rc-lane-h: 28px;
-  --rc-lane-gap: 6px;
-  --rc-lane-pad: 6px;
+  --rc-lane-h: var(--rc-bar-h);
+  --rc-lane-gap: var(--rc-space-2);
+  --rc-lane-pad: var(--rc-space-3);
   --rc-i: 0;
   position: relative;
   width: calc(var(--rc-col-w) * var(--rc-cols));
@@ -86,9 +97,8 @@
 }
 
 .rc-timeline {
-  min-height: calc(
-    var(--rc-lane-pad) * 2 + var(--rc-lanes) * var(--rc-lane-h) + (var(--rc-lanes) - 1) * var(--rc-lane-gap)
-  );
+  min-height: var(--rc-row-h);
+  height: var(--rc-row-h);
 }
 
 .rc-grid-head {
@@ -98,7 +108,7 @@
   isolation: isolate;
   background: var(--a2-background-color-default, #fff);
   border-bottom: 1px solid var(--a2-border-color-subdued, #e6e6e6);
-  align-items: end;
+  align-items: stretch;
 }
 
 .rc-head-timeline {
@@ -110,7 +120,7 @@
 
 .rc-month-band {
   position: relative;
-  height: 22px;
+  height: var(--rc-head-band);
   border-bottom: 1px solid var(--a2-border-color-subdued, #e6e6e6);
 }
 
@@ -119,23 +129,31 @@
   top: 0;
   bottom: 0;
   box-sizing: border-box;
-  padding: 2px 8px;
-  text-align: left;
   border-left: 1px solid var(--a2-border-color-subdued, #e6e6e6);
-  overflow: hidden;
 }
 
-.rc-month-cell span {
+.rc-period-pin {
   position: sticky;
-  left: 8px;
+  left: var(--rc-gutter);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  height: var(--rc-head-band);
+  width: max-content;
+  max-width: 240px;
+  padding: 0 var(--rc-space-3);
+  box-sizing: border-box;
   font-size: 12px;
-  color: var(--a2-foreground-color-subdued, #707070);
-  white-space: nowrap;
-}
-
-.rc-context-label {
   font-weight: 600;
+  line-height: var(--rc-head-band);
   color: var(--a2-foreground-color-default, #040404);
+  background: linear-gradient(
+    to right,
+    var(--a2-background-color-default, #fff) 70%,
+    color-mix(in srgb, var(--a2-background-color-default, #fff) 0%, transparent)
+  );
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .rc-gutter,
@@ -145,27 +163,29 @@
   z-index: 4;
   background: var(--a2-background-color-default, #fff);
   border-right: 1px solid var(--a2-border-color-subdued, #e6e6e6);
-  padding: 8px 12px;
+  padding: 0 var(--rc-space-3);
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
+  gap: var(--rc-space-2);
+  min-height: var(--rc-row-h);
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .rc-gutter-head {
   z-index: 9;
-  font-weight: 600;
-  align-items: flex-start;
+  height: auto;
+  min-height: calc(var(--rc-head-band) + var(--rc-head-cols));
+  align-items: center;
 }
 
 .rc-gutter-copy {
   min-width: 0;
   flex: 1;
-}
-
-.rc-timeline.is-thin {
-  --rc-lane-h: 8px;
-  --rc-lane-pad: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 
 .rc-cell {
@@ -175,6 +195,7 @@
   left: calc(var(--rc-col-w) * var(--rc-i));
   width: var(--rc-col-w);
   border-left: 1px solid var(--a2-border-color-subdued, #e6e6e6);
+  z-index: 0;
 }
 
 .rc-col {
@@ -188,7 +209,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4px 0;
+  padding: var(--rc-space-1) 0;
   min-height: 0;
   overflow: hidden;
   border-left: 1px solid var(--a2-border-color-subdued, #e6e6e6);
@@ -197,13 +218,8 @@
 
 .rc-cols {
   position: relative;
-  height: 40px;
+  height: var(--rc-head-cols);
   overflow: hidden;
-}
-
-.rc-col.is-today,
-.rc-cell.is-today {
-  background: color-mix(in srgb, var(--a2-status-color-info, #0265dc) 10%, transparent);
 }
 
 .rc-col.is-weekend,
@@ -211,16 +227,56 @@
   background: color-mix(in srgb, var(--a2-background-color-strong, #f4f4f4) 70%, transparent);
 }
 
+.rc-today-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: color-mix(in srgb, var(--rc-today) 45%, transparent);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.rc-today-pill,
+.rc-today-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--rc-today);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.rc-today-chip {
+  padding: 0 8px;
+}
+
+.rc-today-mark {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
 .rc-date-jump {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--rc-space-2);
 }
 
 .rc-date-jump input {
   font: inherit;
   font-size: 14px;
-  padding: 4px 8px;
+  padding: var(--rc-space-1) var(--rc-space-2);
   border: 1px solid var(--a2-border-color-default, #c4c4c4);
   border-radius: 6px;
   color: var(--a2-foreground-color-default, #040404);
@@ -229,6 +285,7 @@
 
 .rc-row {
   border-bottom: 1px solid var(--a2-border-color-subdued, #e6e6e6);
+  min-height: var(--rc-row-h);
 }
 
 .rc-row.is-group .rc-gutter,
@@ -261,26 +318,18 @@
   transform: rotate(-90deg);
 }
 
-.rc-row.is-stacked .rc-gutter {
-  align-items: flex-start;
-  padding-top: 10px;
-}
-
-.rc-row.is-stacked .rc-chevron {
-  margin-top: 2px;
-}
-
 .rc-bar {
   position: absolute;
-  top: calc(var(--rc-lane-pad) + var(--rc-lane, 0) * (var(--rc-lane-h) + var(--rc-lane-gap)));
-  height: var(--rc-lane-h);
-  border-radius: 6px;
+  top: 50%;
+  margin-top: calc(var(--rc-bar-h) / -2);
+  height: var(--rc-bar-h);
+  border-radius: var(--rc-bar-r);
   display: flex;
   align-items: center;
   justify-content: flex-start !important;
   text-align: left !important;
-  gap: 4px;
-  padding: 0 8px;
+  gap: var(--rc-space-1);
+  padding: 0 var(--rc-space-2);
   min-width: 4px;
   box-sizing: border-box;
   overflow: hidden;
@@ -348,15 +397,6 @@ body.rc-grabbing {
   text-align: left !important;
 }
 
-.rc-timeline.is-single .rc-bar {
-  top: 50%;
-  margin-top: calc(var(--rc-lane-h) / -2);
-}
-
-.rc-bar.is-thin {
-  padding: 0;
-}
-
 .rc-bar.is-unassigned {
   background: repeating-linear-gradient(
     -45deg,
@@ -374,7 +414,7 @@ body.rc-grabbing {
 }
 
 .rc-bar.is-selected {
-  box-shadow: 0 0 0 2px var(--a2-status-color-info, #0265dc);
+  box-shadow: 0 0 0 2px var(--rc-today);
 }
 
 .rc-day-guide {
@@ -383,8 +423,8 @@ body.rc-grabbing {
   bottom: 0;
   z-index: 1;
   pointer-events: none;
-  background: color-mix(in srgb, var(--a2-status-color-info, #0265dc) 14%, transparent);
-  border-left: 1px solid color-mix(in srgb, var(--a2-status-color-info, #0265dc) 48%, transparent);
+  background: color-mix(in srgb, var(--rc-today) 14%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--rc-today) 48%, transparent);
   box-sizing: border-box;
 }
 
@@ -393,7 +433,7 @@ body.rc-grabbing {
   z-index: 40;
   pointer-events: none;
   transform: translate(14px, 18px);
-  padding: 4px 8px;
+  padding: var(--rc-space-1) var(--rc-space-2);
   border-radius: 6px;
   background: var(--a2-background-color-inverse, #141414);
   color: var(--a2-foreground-color-inverse, #fff);
@@ -414,10 +454,10 @@ body.rc-grabbing {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px 16px;
+  gap: var(--rc-space-3) var(--rc-space-4);
   width: max-content;
   max-width: calc(100vw - 48px);
-  padding: 12px 16px;
+  padding: var(--rc-space-3) var(--rc-space-4);
   background: var(--a2-background-color-default, #fff);
   border-radius: 12px;
   box-shadow: 0 8px 24px color-mix(in srgb, #141414 8%, transparent);
@@ -427,12 +467,12 @@ body.rc-grabbing {
 .rc-bulk-bar-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--rc-space-4);
   flex: none;
 }
 
 .rc-bulk-bar-actions {
-  gap: 8px;
+  gap: var(--rc-space-2);
 }
 
 .rc-hours {

@@ -371,6 +371,23 @@ export function formatMoveRange(start: string, end: string) {
   return `${MONTHS[a.getUTCMonth()]} ${a.getUTCDate()} to ${MONTHS[b.getUTCMonth()]} ${b.getUTCDate()}`
 }
 
+export function formatWindowCaption(window: TimeWindow) {
+  if (window.end <= window.start) return ''
+  return formatMoveRange(isoFromTs(window.start), isoFromTs(window.end - 1))
+}
+
+export function periodPinLabel(zoom: Zoom, window: TimeWindow) {
+  const d = new Date(window.start)
+  if (zoom === 'days' || zoom === 'weeks') {
+    return `${MONTHS_LONG[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+  }
+  return String(d.getUTCFullYear())
+}
+
+export function todayDayNumber() {
+  return new Date(utc(DEMO_TODAY)).getUTCDate()
+}
+
 export function workdaysInRange(start: number, end: number) {
   let n = 0
   for (let t = start; t < end; t += DAY_MS) {
