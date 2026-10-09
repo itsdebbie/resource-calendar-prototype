@@ -98,6 +98,13 @@ type DragHint = {
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
 
+function isTextEntryTarget(target: EventTarget | null) {
+  if (target instanceof HTMLTextAreaElement) return true
+  if (target instanceof HTMLElement && target.isContentEditable) return true
+  if (!(target instanceof HTMLInputElement)) return false
+  return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
+}
+
 type GanttCtx = {
   zoom: Zoom
   columns: Column[]
@@ -256,14 +263,12 @@ export function ResourceCalendar() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
+      if (isTextEntryTarget(target)) return
       const plus = event.key === '=' || event.key === '+'
       const minus = event.key === '-' || event.key === '_'
       if (!plus && !minus) return
-      if (event.metaKey || event.ctrlKey || plus || minus) {
-        event.preventDefault()
-        changeZoom(zoomStep(zoom, plus ? -1 : 1), isoFromTs(viewWindow.start), 0)
-      }
+      event.preventDefault()
+      changeZoom(zoomStep(zoom, plus ? -1 : 1), isoFromTs(viewWindow.start), 0)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -475,14 +480,11 @@ export function ResourceCalendar() {
                 </SegmentedControl>
               </div>
               <div className="rc-toolbar-cluster">
-                <Tooltip
-                  openOnHover
-                  delay={600}
-                  placement="top"
-                  open={zoomTipOpen}
-                  onOpenChange={(next) => setZoomTipOpen(next)}
-                >
-                  <Tooltip.Trigger onPointerDown={() => setZoomTipOpen(false)}>
+                <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
+                  <Tooltip.Trigger
+                    onPointerDown={() => setZoomTipOpen(false)}
+                    onMouseLeave={() => setZoomTipOpen(undefined)}
+                  >
                     <SegmentedControl
                       size="small"
                       selected={zoom}
