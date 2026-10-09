@@ -80,6 +80,7 @@ import {
   segmentIsSliver,
   shiftSpan,
   todayMarkerX,
+  mondayOf,
   weekIndexOf,
   weekendSlices,
   worldXForDate,
@@ -780,7 +781,9 @@ export function ResourceCalendar() {
                       includeWeekends={showWeekends}
                     />
                   ))}
-
+            </GanttContext.Provider>
+            </div>
+          </div>
               {groupBy === 'projects' ? (
                 <CrewPanel
                   open={crewOpen}
@@ -792,6 +795,7 @@ export function ResourceCalendar() {
                   visColumns={visColumns}
                   columns={columns}
                   colW={colW}
+                  scrollLeft={scrollLeft}
                   draggingPersonId={draggingPersonId}
                   hoursBefore={hoursBefore}
                   issues={issues}
@@ -803,9 +807,6 @@ export function ResourceCalendar() {
                   total={crewCounts.total}
                 />
               ) : null}
-            </GanttContext.Provider>
-            </div>
-          </div>
         </Flex>
       </Card>
 
@@ -1364,12 +1365,14 @@ function layoutRowItems(rows: (Assignment & Span)[], zoom: Zoom, columns: Column
   const items: LayoutItem[] = longs.map((row) => ({ type: 'bar', row }))
   for (const [, group] of shortByWeek) {
     if (group.length >= 2) {
+      const start = zoom === 'weeks' ? mondayOf(group[0]!.start) : group.reduce((min, row) => (row.start < min ? row.start : min), group[0]!.start)
+      const end = zoom === 'weeks' ? addDays(start, 6) : group.reduce((max, row) => (row.end > max ? row.end : max), group[0]!.end)
       items.push({
         type: 'chip',
         id: `chip:${group.map((g) => g.id).join('+')}`,
         rows: group,
-        start: group.reduce((min, row) => (row.start < min ? row.start : min), group[0]!.start),
-        end: group.reduce((max, row) => (row.end > max ? row.end : max), group[0]!.end),
+        start,
+        end,
       })
     } else if (group[0]) {
       items.push({ type: 'bar', row: group[0], floatLabel: true })
@@ -1502,7 +1505,7 @@ function ShortChip({
       role="button"
       tabIndex={-1}
       data-span={id}
-      className={`rc-bar${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
+      className={`rc-bar is-chip${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
       style={{
         left: `calc(${style.left} + 3px)`,
         width: `calc(${style.width} - 6px)`,

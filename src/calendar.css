@@ -103,7 +103,7 @@
 .rc-scroll {
   overflow-x: scroll;
   overflow-y: auto;
-  max-height: calc(100vh - 240px);
+  max-height: calc(100vh - 360px);
   overscroll-behavior-x: contain;
   contain: inline-size;
   min-width: 0;
@@ -118,9 +118,7 @@
 }
 
 .rc-grid-head,
-.rc-row,
-.rc-crew-head,
-.rc-crew-row {
+.rc-row {
   display: grid;
   grid-template-columns: var(--rc-gutter) max-content;
   width: max-content;
@@ -589,6 +587,11 @@
   z-index: 3;
 }
 
+.rc-bar.is-chip {
+  min-width: 108px;
+  overflow: hidden;
+}
+
 .rc-bar-handle {
   position: absolute;
   right: 0;
@@ -774,27 +777,52 @@ body.rc-grabbing {
 }
 
 .rc-crew {
-  position: sticky;
-  bottom: 0;
+  flex: none;
   z-index: 7;
   background: var(--a2-background-color-default, #fff);
   border-top: 1px solid var(--a2-border-color-default, #c4c4c4);
   box-shadow: 0 -8px 16px color-mix(in srgb, #141414 6%, transparent);
+  max-height: 340px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  width: 100%;
 }
 
 .rc-crew-head {
-  min-height: 48px;
-  align-items: center;
-  background: var(--a2-background-color-default, #fff);
-}
-
-.rc-crew-head-main {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--rc-space-2);
-  padding: 0 var(--rc-space-3);
   min-height: 48px;
+  padding: 6px var(--rc-space-3);
+  background: var(--a2-background-color-default, #fff);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.rc-crew-title {
+  display: flex;
+  align-items: center;
+  gap: var(--rc-space-2);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  min-width: 220px;
+  flex: none;
+}
+
+.rc-crew-title .rc-chevron {
+  transform: none;
+}
+
+.rc-crew-title .rc-chevron:not(.is-open) svg {
+  transform: rotate(-90deg);
+}
+
+.rc-crew-title .rc-chevron.is-open svg {
+  transform: rotate(0deg);
 }
 
 .rc-issue-chips {
@@ -802,6 +830,8 @@ body.rc-grabbing {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--rc-space-2);
+  flex: 1;
+  min-width: 0;
 }
 
 .rc-issue-chip,
@@ -855,9 +885,19 @@ body.rc-grabbing {
 }
 
 .rc-crew-row {
+  display: grid;
+  grid-template-columns: var(--rc-gutter) minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
   border-top: 1px solid var(--a2-border-color-subdued, #e6e6e6);
   min-height: 48px;
   background: #fff;
+}
+
+.rc-crew-track {
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
 }
 
 .rc-crew-row.is-dragging-row {
@@ -866,6 +906,8 @@ body.rc-grabbing {
 
 .rc-crew-gutter {
   background: #fff;
+  position: relative;
+  left: auto;
 }
 
 .rc-crew-cell {
@@ -948,9 +990,8 @@ body.rc-grabbing {
   border-top: 1px solid var(--a2-border-color-subdued, #e6e6e6);
   background: #fff;
   position: sticky;
-  left: 0;
+  bottom: 0;
   width: 100%;
-  max-width: 100vw;
   box-sizing: border-box;
 }
 
