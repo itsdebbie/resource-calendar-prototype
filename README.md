@@ -4,9 +4,10 @@ Interactive Anvil2 prototype of Group by Projects from the Resource Calendar Fig
 
 - Continuous horizontal timeline (shared across People / Projects). Opens on today. Scroll earlier or later at every zoom.
 - Default **Days** zoom shows two weeks. Zoom Days → Weeks → Months → Quarters → Year (buttons, `+`/`-`, or ctrl/pinch scroll).
-- Today + a single **Go to** date. Technician hours are scheduled / capacity for the visible range.
-- Editing is Days and Weeks only. Day view moves a single day; Week view moves the whole bar and resizes from the right edge, snapping to the nearest day, with a live date tooltip and a day guide in the week column.
-- Month, Quarter, and Year are read-only (select and view). Shift-click adds bars to the selection.
+- Sticky month (or year) stays pinned at the left of the timeline header. Today is a light vertical guide behind bars, with a blue pill/chip in the header.
+- Technician hours in the gutter are for the visible dates; project and phase totals are whole-project budgets.
+- Collapsed project rows are a single summary bar; expanding lists one phase per row. Row height does not change while scrolling.
+- Editing is Days and Weeks only. Month, Quarter, and Year are read-only. Shift-click adds bars to the selection.
 
 ```bash
 npm install
