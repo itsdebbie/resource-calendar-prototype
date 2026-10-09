@@ -139,8 +139,9 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       const el = scrollRef.current
       if (!el) return 0
       const rect = el.getBoundingClientRect()
+      const viewW = Math.min(el.clientWidth, window.innerWidth)
       const left = rect.left + GUTTER + EDGE_PX
-      const right = rect.right - EDGE_PX
+      const right = rect.left + viewW - EDGE_PX
       let dx = 0
       if (clientX > right) dx = Math.min(36, 12 + (clientX - right) / 3)
       else if (clientX < left) dx = -Math.min(36, 12 + (left - clientX) / 3)
@@ -220,12 +221,13 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const onScroll = () => {
       publishWindow(el)
       if (!readyRef.current || pendingAlign.current) return
-      if (el.scrollWidth <= el.clientWidth + colWRef.current) return
-      if (Math.abs(el.scrollLeft - alignedAt.current) < 2) return
       const width = colWRef.current
-      if (el.scrollLeft < width * 6) {
+      const viewW = Math.min(el.clientWidth, window.innerWidth)
+      if (el.scrollWidth <= viewW + width) return
+      if (Math.abs(el.scrollLeft - alignedAt.current) < 2) return
+      if (el.scrollLeft > 8 && el.scrollLeft < width * 6) {
         setExtent((e) => ({ min: e.min - BUFFER_COLS, max: e.max }))
-      } else if (el.scrollLeft + el.clientWidth > el.scrollWidth - width * 6) {
+      } else if (el.scrollLeft + viewW > el.scrollWidth - width * 6) {
         setExtent((e) => ({ min: e.min, max: e.max + BUFFER_COLS }))
       }
     }

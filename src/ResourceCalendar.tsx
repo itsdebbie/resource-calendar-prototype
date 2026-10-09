@@ -45,6 +45,7 @@ import {
 import {
   DEMO_TODAY,
   GUTTER,
+  isIsoDate,
   activeSegments,
   barStyle,
   contextLabel as contextCaption,
@@ -75,6 +76,7 @@ type DragState = {
   originDate: string
   fromDay: string
   snapshot: Record<string, Span>
+  originX: number
   lastX: number
   moved: boolean
 }
@@ -264,6 +266,8 @@ export function ResourceCalendar() {
     (clientX: number) => {
       const drag = dragRef.current
       if (!drag) return
+      if (Math.abs(clientX - drag.originX) > 5) drag.moved = true
+      if (!drag.moved) return
       autoScrollFromPointer(clientX)
       const date = dateAtClientX(clientX)
       const delta = diffDays(drag.originDate, date)
@@ -346,6 +350,7 @@ export function ResourceCalendar() {
   function onBarPointerDown(event: ReactPointerEvent, id: string, span: Span, mode: DragMode) {
     event.preventDefault()
     event.stopPropagation()
+    if (event.button !== 0) return
     const originDate = dateAtClientX(event.clientX)
     const ids =
       mode === 'move' && selectedKeys.has(id) && selected.length > 1
@@ -362,6 +367,7 @@ export function ResourceCalendar() {
       originDate,
       fromDay: originDate,
       snapshot,
+      originX: event.clientX,
       lastX: event.clientX,
       moved: false,
     }
@@ -464,7 +470,8 @@ export function ResourceCalendar() {
                     type="date"
                     value={goTo}
                     onChange={(event) => {
-                      const next = event.target.value || DEMO_TODAY
+                      const next = event.target.value
+                      if (!isIsoDate(next)) return
                       setGoTo(next)
                       jumpTo(next, 0)
                     }}
@@ -1167,7 +1174,7 @@ function BarSegment({
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={-1}
       className={`rc-bar${thin ? ' is-thin' : ''}${unassigned ? ' is-unassigned' : ''}${selected ? ' is-selected' : ''}${sliver ? ' is-sliver' : ''}${dragging ? ' is-dragging' : ''}`}
       style={
         {

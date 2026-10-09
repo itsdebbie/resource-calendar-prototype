@@ -29,8 +29,14 @@ const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 /** Monday 2020-01-06, used as week/day index 0. */
 const INDEX_EPOCH = Date.UTC(2020, 0, 6)
 
+export function isIsoDate(iso: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso)
+}
+
 export function utc(iso: string) {
-  return Date.parse(`${iso}T00:00:00Z`)
+  if (!isIsoDate(iso)) return Date.parse(`${DEMO_TODAY}T00:00:00Z`)
+  const t = Date.parse(`${iso}T00:00:00Z`)
+  return Number.isFinite(t) ? t : Date.parse(`${DEMO_TODAY}T00:00:00Z`)
 }
 
 export function isoFromTs(ts: number) {
@@ -78,6 +84,7 @@ function divMod(n: number, d: number) {
 }
 
 export function columnIndexAt(zoom: Zoom, ts: number) {
+  if (!Number.isFinite(ts)) return columnIndexAt(zoom, utc(DEMO_TODAY))
   if (zoom === 'days') return Math.floor((ts - INDEX_EPOCH) / DAY_MS)
   if (zoom === 'weeks') return Math.floor((ts - INDEX_EPOCH) / (7 * DAY_MS))
   const d = new Date(ts)
