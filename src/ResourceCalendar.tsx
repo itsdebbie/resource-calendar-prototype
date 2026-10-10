@@ -1495,51 +1495,51 @@ function ShortChip({
   const hours = rows.reduce((sum, row) => sum + hoursTotal(row), 0)
   const label = `${rows.length} bookings · ${hours}h`
   const style = barStyle(start, end, columns)
-  if (!style.visible) return null
   const selectedNow = rows.some((row) => selectedKeys.has(row.id)) && editable
   const dragging = rows.some((row) => dragIds.has(row.id))
   const [open, setOpen] = useState(false)
+  if (!style.visible) return null
 
-  const inner = (
-    <div
-      role="button"
-      tabIndex={-1}
-      data-span={id}
-      className={`rc-bar is-chip${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
-      style={{
-        left: `calc(${style.left} + 3px)`,
-        width: `calc(${style.width} - 6px)`,
-        background: tintFill(color),
-        color: ink,
-        '--rc-lane': lane,
-        '--rc-bar-color': color,
-        '--rc-bar-ink': ink,
-      } as CSSProperties}
-      onClick={(event) => {
-        event.stopPropagation()
-        if (!dragging) setOpen(true)
-      }}
-      onPointerDown={(event) => {
-        if (!editable || event.button !== 0) return
-        const first = rows[0]
-        if (first) onBarPointerDown(event, first.id, first, 'move', rows.map((row) => row.id))
-      }}
-    >
-      <span className="rc-bar-label">
-        {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
-        <span className="rc-bar-name">{label}</span>
-      </span>
-    </div>
-  )
+  const wrapStyle = {
+    left: `calc(${style.left} + 3px)`,
+    width: `max(124px, calc(${style.width} - 6px))`,
+    '--rc-lane': lane,
+  } as CSSProperties
 
   return (
     <Popover placement="bottom" open={open || undefined} onClose={() => setOpen(false)} openOnHover>
       <Popover.Trigger>
         {(props) => {
-          const { ref, ...rest } = props
+          const { ref, onClick, ...rest } = props
           return (
-            <div {...rest} ref={ref as never} style={{ display: 'contents' }}>
-              {inner}
+            <div {...rest} ref={ref as never} className="rc-chip-wrap" style={wrapStyle}>
+              <div
+                role="button"
+                tabIndex={-1}
+                data-span={id}
+                className={`rc-bar is-chip${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
+                style={{
+                  background: tintFill(color),
+                  color: ink,
+                  '--rc-bar-color': color,
+                  '--rc-bar-ink': ink,
+                } as CSSProperties}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onClick(event)
+                  if (!dragging) setOpen(true)
+                }}
+                onPointerDown={(event) => {
+                  if (!editable || event.button !== 0) return
+                  const first = rows[0]
+                  if (first) onBarPointerDown(event, first.id, first, 'move', rows.map((row) => row.id))
+                }}
+              >
+                <span className="rc-bar-label">
+                  {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
+                  <span className="rc-bar-name">{label}</span>
+                </span>
+              </div>
             </div>
           )
         }}

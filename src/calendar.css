@@ -588,8 +588,30 @@
 }
 
 .rc-bar.is-chip {
-  min-width: 108px;
+  min-width: 124px;
   overflow: hidden;
+  font-size: 12px;
+  position: relative;
+  left: auto;
+  width: 100%;
+  top: 0;
+  margin-top: 0;
+}
+
+.rc-chip-wrap {
+  position: absolute;
+  height: var(--rc-bar-h);
+  z-index: 3;
+  min-width: 124px;
+}
+
+.rc-timeline.is-packed .rc-chip-wrap {
+  top: calc(var(--rc-lane-pad) + var(--rc-lane) * (var(--rc-lane-h) + var(--rc-lane-gap)));
+}
+
+.rc-timeline:not(.is-packed) .rc-chip-wrap {
+  top: 50%;
+  margin-top: calc(var(--rc-bar-h) / -2);
 }
 
 .rc-bar-handle {
@@ -890,6 +912,7 @@ body.rc-grabbing {
   width: 100%;
   min-width: 0;
   border-top: 1px solid var(--a2-border-color-subdued, #e6e6e6);
+  height: 48px;
   min-height: 48px;
   background: #fff;
 }
@@ -898,6 +921,11 @@ body.rc-grabbing {
   min-width: 0;
   overflow: hidden;
   position: relative;
+  height: 48px;
+}
+
+.rc-crew-cells {
+  height: 48px;
 }
 
 .rc-crew-row.is-dragging-row {
@@ -913,7 +941,7 @@ body.rc-grabbing {
 .rc-crew-cell {
   position: absolute;
   top: 6px;
-  bottom: 6px;
+  height: 36px;
   left: calc(var(--rc-col-w) * var(--rc-i) + 4px);
   width: calc(var(--rc-col-w) - 8px);
   border-radius: 6px;
