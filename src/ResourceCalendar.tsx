@@ -199,14 +199,18 @@ function useBarTip() {
   const [open, setOpen] = useState(false)
   const [pinX, setPinX] = useState(0)
   const timer = useRef(0)
+  const hovering = useRef(false)
 
   const onPointerEnter = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (hovering.current) return
+    hovering.current = true
     setPinX(hoverPinX(event))
     window.clearTimeout(timer.current)
     timer.current = window.setTimeout(() => setOpen(true), TIP_DELAY)
   }, [])
 
   const hide = useCallback(() => {
+    hovering.current = false
     window.clearTimeout(timer.current)
     setOpen(false)
   }, [])
