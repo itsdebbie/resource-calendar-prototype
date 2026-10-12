@@ -10,11 +10,19 @@ body,
 }
 
 .app-shell {
+  height: 100%;
   min-height: 100%;
   max-width: 100%;
   min-width: 0;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
   background: var(--a2-background-color-strong, #f9f9f9);
+}
+
+.app-shell > :last-child {
+  flex: 1;
+  min-height: 0;
 }
 
 .rc-page-content {
