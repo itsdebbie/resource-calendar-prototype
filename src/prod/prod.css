@@ -22,6 +22,7 @@
 }
 
 .prod-page {
+  flex: 1;
   min-height: 0;
   height: 100%;
   background: #f4f4f4;
@@ -375,6 +376,7 @@
   overflow: hidden;
   cursor: grab;
   user-select: none;
+  -webkit-user-drag: none;
   z-index: 2;
   color: #040404;
   font-size: 12px;
@@ -383,8 +385,8 @@
 }
 
 .prod-bar.is-rc {
-  top: 6px;
-  height: 38px;
+  top: 4px;
+  height: 42px;
 }
 
 .prod-bar.is-thin {
@@ -406,6 +408,11 @@
 .prod-bar.is-dragging {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
   z-index: 5;
+}
+
+.prod-bar-title,
+.prod-bar-detail {
+  pointer-events: none;
 }
 
 .prod-bar-title {

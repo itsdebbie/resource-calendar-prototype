@@ -54,7 +54,7 @@ import './prod.css'
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const DAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const SCROLL_PX = 12
+const SCROLL_PX = 8
 
 function resizeStart(span: Span, next: string): Span {
   if (utc(next) > utc(span.end)) return { ...span, start: span.end }
@@ -152,8 +152,7 @@ export function ProdPage({ view }: { view: ProdView }) {
   const barsRef = useRef(bars)
   barsRef.current = bars
   const edgeDir = useRef(0)
-  const edgeTimer = useRef(0)
-  const edgeRaf = useRef(0)
+  const edgeSince = useRef(0)
   const timeline = useTimelineScroll('days', scrollRef, { gutter, initialIso: PROD_TODAY })
   const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible } = timeline
   const dateAtClientXRef = useRef(dateAtClientX)
@@ -171,7 +170,8 @@ export function ProdPage({ view }: { view: ProdView }) {
     setDraggingId(null)
     setDragHint(null)
     dragRef.current = null
-  }, [isSchedule])
+    jumpTo(PROD_TODAY)
+  }, [isSchedule, jumpTo])
 
   const visibleRows = useMemo(() => {
     if (!isSchedule) return rows
@@ -180,9 +180,7 @@ export function ProdPage({ view }: { view: ProdView }) {
 
   const stopEdge = useCallback(() => {
     edgeDir.current = 0
-    window.clearTimeout(edgeTimer.current)
-    if (edgeRaf.current) cancelAnimationFrame(edgeRaf.current)
-    edgeRaf.current = 0
+    edgeSince.current = 0
   }, [])
 
   const applyDrag = useCallback(
@@ -201,60 +199,31 @@ export function ProdPage({ view }: { view: ProdView }) {
       if (drag.mode === 'move') next = shift(drag.snapshot, diffDays(drag.originDate, date))
       else if (drag.mode === 'resize-start') next = resizeStart(drag.snapshot, date)
       else next = resizeEnd(drag.snapshot, date)
-      setBars((prev) =>
-        prev.map((bar) => {
-          if (bar.id !== drag.id) return bar
-          let rowId = bar.rowId
-          if (drag.mode === 'move') {
-            const hit = rowAtPoint(clientY)
-            if (!isSchedule) {
-              if (hit) rowId = hit
-            } else {
-              const src = scheduleRows.find((r) => r.id === drag.originRow)
-              const dst = scheduleRows.find((r) => r.id === hit)
-              if (hit && dst?.kind === 'tech' && src?.parentId && dst.parentId === src.parentId) rowId = hit
-            }
-          }
-          return { ...bar, rowId, start: next.start, end: next.end }
-        }),
+      let nextRow = drag.originRow
+      if (drag.mode === 'move') {
+        const hit = rowAtPoint(clientY)
+        if (!isSchedule) {
+          if (hit) nextRow = hit
+        } else {
+          const src = scheduleRows.find((r) => r.id === drag.originRow)
+          const dst = scheduleRows.find((r) => r.id === hit)
+          if (hit && dst?.kind === 'tech' && src?.parentId && dst.parentId === src.parentId) nextRow = hit
+        }
+      }
+      setBars((prev) => {
+        const current = prev.find((bar) => bar.id === drag.id)
+        if (current && current.start === next.start && current.end === next.end && current.rowId === nextRow) return prev
+        return prev.map((bar) => (bar.id === drag.id ? { ...bar, rowId: nextRow, start: next.start, end: next.end } : bar))
+      })
+      const label = liveRangeLabel(next.start, next.end)
+      setDragHint((prev) =>
+        prev && prev.x === clientX && prev.y === clientY && prev.label === label ? prev : { x: clientX, y: clientY, label },
       )
-      setDragHint({ x: clientX, y: clientY, label: liveRangeLabel(next.start, next.end) })
     },
     [isSchedule],
   )
   const applyDragRef = useRef(applyDrag)
   applyDragRef.current = applyDrag
-
-  const updateEdge = useCallback(
-    (clientX: number) => {
-      const el = scrollRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const viewW = Math.min(el.clientWidth, window.innerWidth)
-      const left = rect.left + gutter + EDGE_ZONE
-      const right = rect.left + viewW - EDGE_ZONE
-      let dir = 0
-      if (clientX > right) dir = 1
-      else if (clientX < left) dir = -1
-      if (dir === edgeDir.current) return
-      edgeDir.current = dir
-      window.clearTimeout(edgeTimer.current)
-      if (edgeRaf.current) cancelAnimationFrame(edgeRaf.current)
-      edgeRaf.current = 0
-      if (!dir) return
-      edgeTimer.current = window.setTimeout(() => {
-        const tick = () => {
-          if (!edgeDir.current) return
-          scrollByRef.current(edgeDir.current * SCROLL_PX)
-          const drag = dragRef.current
-          if (drag) applyDragRef.current(drag.lastX, drag.lastY)
-          edgeRaf.current = requestAnimationFrame(tick)
-        }
-        tick()
-      }, EDGE_DELAY_MS)
-    },
-    [gutter],
-  )
 
   const endDrag = useCallback(() => {
     const drag = dragRef.current
@@ -286,25 +255,26 @@ export function ProdPage({ view }: { view: ProdView }) {
         })
       }
     }
-    toast.success({
-      title: 'Schedule updated',
-      message: 'Drop saved. Undo restores the previous dates.',
-      actions: {
-        primary: {
-          label: 'Undo',
-          onClick: () => {
-            if (before) setBars(before)
+    window.setTimeout(() => {
+      toast.success({
+        title: 'Schedule updated',
+        message: 'Drop saved. Undo restores the previous dates.',
+        actions: {
+          primary: {
+            label: 'Undo',
+            onClick: () => {
+              if (before) setBars(before)
+            },
           },
         },
-      },
-    })
+      })
+    }, 0)
   }, [isSchedule, stopEdge])
 
   useEffect(() => {
-    const onMove = (event: PointerEvent) => {
+    const onMove = (event: PointerEvent | MouseEvent) => {
       if (!dragRef.current) return
       applyDragRef.current(event.clientX, event.clientY)
-      updateEdge(event.clientX)
     }
     const onUp = () => {
       if (dragRef.current) endDrag()
@@ -312,15 +282,48 @@ export function ProdPage({ view }: { view: ProdView }) {
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onUp)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
     }
-  }, [endDrag, updateEdge])
+  }, [endDrag])
+
+  useEffect(() => {
+    if (!draggingId) return
+    let raf = 0
+    const tick = () => {
+      const drag = dragRef.current
+      const el = scrollRef.current
+      if (drag && el) {
+        const rect = el.getBoundingClientRect()
+        const x = drag.lastX
+        let dir = 0
+        if (x >= rect.right - EDGE_ZONE) dir = 1
+        else if (x <= rect.left + gutter + EDGE_ZONE) dir = -1
+        const now = performance.now()
+        if (dir !== edgeDir.current) {
+          edgeDir.current = dir
+          edgeSince.current = dir ? now : 0
+        }
+        if (dir && edgeSince.current && now - edgeSince.current >= EDGE_DELAY_MS) {
+          scrollByRef.current(dir * SCROLL_PX)
+        }
+        applyDragRef.current(drag.lastX, drag.lastY)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [draggingId, gutter])
 
   function startDrag(event: ReactPointerEvent, bar: ProdBar, mode: DragMode) {
-    if (bar.readOnly || event.button !== 0) return
+    if (bar.readOnly) return
+    if (event.button > 0) return
     event.preventDefault()
     event.stopPropagation()
     setSelected(bar.id)
@@ -664,7 +667,21 @@ function DataRow({
           </span>
         ) : null}
       </div>
-      <div className="prod-days" style={{ width: columns.length * colW, height: ROW_H }}>
+      <div
+        className="prod-days"
+        style={{ width: columns.length * colW, height: ROW_H }}
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest('.prod-handle, .prod-bar')) return
+          const rect = event.currentTarget.getBoundingClientRect()
+          const x = event.clientX - rect.left
+          const hit = bars.find((bar) => {
+            if (bar.readOnly) return false
+            const box = barBox(bar.start, bar.end, minIndex, colW, columns.length)
+            return Boolean(box && x >= box.left && x <= box.left + box.width)
+          })
+          if (hit) onDragStart(event, hit, 'move')
+        }}
+      >
         {columns.map((col) => (
           <div
             key={col.id}
@@ -727,6 +744,8 @@ function BarView({
         borderRadius: BAR_RADIUS,
         color: dark ? '#fff' : '#040404',
       }}
+      draggable={false}
+      onDragStart={(event) => event.preventDefault()}
       onClick={(event) => {
         event.stopPropagation()
         onSelect(bar.id)

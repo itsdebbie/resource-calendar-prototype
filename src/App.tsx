@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Page, Text } from '@servicetitan/anvil2'
+import { Page, Text, Toaster } from '@servicetitan/anvil2'
 import { ResourceCalendar } from './ResourceCalendar'
 import { ProdPage } from './prod/ProdPage'
 import './index.css'
@@ -35,6 +35,9 @@ function App() {
           Prod Resource Calendar
         </a>
       </nav>
+      <div className="app-toaster">
+        <Toaster id="main-toaster" />
+      </div>
       {route === 'redesign' ? (
         <Page>
           <Page.Header

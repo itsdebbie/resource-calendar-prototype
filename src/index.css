@@ -9,6 +9,11 @@ body,
   font-family: var(--a2-font-family-base, 'Nunito Sans', sans-serif);
 }
 
+#root > * {
+  height: 100%;
+  min-height: 0;
+}
+
 .app-shell {
   height: 100%;
   min-height: 100%;
@@ -23,6 +28,12 @@ body,
 .app-shell > :last-child {
   flex: 1;
   min-height: 0;
+}
+
+.app-toaster {
+  flex: none;
+  height: 0;
+  overflow: visible;
 }
 
 .rc-page-content {
