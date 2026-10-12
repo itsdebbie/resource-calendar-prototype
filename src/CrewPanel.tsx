@@ -1,5 +1,5 @@
-import { Avatar, Button, Icon, Text } from '@servicetitan/anvil2'
-import type { CSSProperties } from 'react'
+import { Avatar, Button, Chip, Icon, Text } from '@servicetitan/anvil2'
+import { useEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import type { CalendarIssue, IssueKind } from './data'
 import { issueKindLabel, issueKindTitle } from './data'
 import { tintFill } from './palette'
@@ -9,6 +9,10 @@ import type { Column } from './timeline'
 import { CloseIcon, ExpandLessIcon, ExpandMoreIcon, PersonQuestionIcon, WarningIcon } from './icons'
 
 type Finder = { kind: IssueKind; index: number }
+
+const ISSUE_CONFLICT = '#d62100'
+const ISSUE_UNASSIGNED = '#077e50'
+const ISSUE_OVER = '#d62100'
 
 export function CrewPanel({
   open,
@@ -28,6 +32,7 @@ export function CrewPanel({
   onIssueClick,
   onFinderNav,
   onFinderClose,
+  onScrollBy,
   shown,
   total,
 }: {
@@ -48,15 +53,53 @@ export function CrewPanel({
   onIssueClick: (kind: IssueKind) => void
   onFinderNav: (delta: number) => void
   onFinderClose: () => void
+  onScrollBy: (dx: number) => void
   shown: number
   total: number
 }) {
   const minIndex = columns[0]?.index ?? 0
   const conflictN = issues.conflict.length
   const unassignedHours = issues.unassigned.reduce((sum, issue) => sum + (issue.hours ?? 0), 0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const dragRef = useRef<{ x: number; moved: boolean } | null>(null)
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return
+      const dx = event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX
+      if (Math.abs(dx) < 2) return
+      if (!event.shiftKey && Math.abs(event.deltaY) >= Math.abs(dx)) return
+      event.preventDefault()
+      onScrollBy(dx)
+    }
+    root.addEventListener('wheel', onWheel, { passive: false })
+    return () => root.removeEventListener('wheel', onWheel)
+  }, [onScrollBy])
+
+  const onTrackPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    dragRef.current = { x: event.clientX, moved: false }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const onTrackPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const dx = drag.x - event.clientX
+    if (!drag.moved && Math.abs(dx) < 4) return
+    drag.moved = true
+    drag.x = event.clientX
+    onScrollBy(dx)
+  }
+
+  const onTrackPointerUp = () => {
+    dragRef.current = null
+  }
 
   return (
-    <div className={`rc-crew${open ? ' is-open' : ''}`}>
+    <div className={`rc-crew${open ? ' is-open' : ''}`} ref={rootRef}>
       <div className="rc-crew-head">
         <button type="button" className="rc-crew-title" onClick={onToggle}>
           <span className={`rc-chevron ${open ? 'is-open' : ''}`}>
@@ -81,21 +124,33 @@ export function CrewPanel({
           ) : (
             <>
               {conflictN > 0 ? (
-                <button type="button" className="rc-issue-chip is-conflict" onClick={() => onIssueClick('conflict')}>
-                  <Icon svg={WarningIcon} size="small" inherit />
-                  {conflictN} {issueKindLabel('conflict', conflictN)}
-                </button>
+                <Chip
+                  className="rc-issue-chip"
+                  size="small"
+                  color={ISSUE_CONFLICT}
+                  icon={WarningIcon}
+                  label={`${conflictN} ${issueKindLabel('conflict', conflictN)}`}
+                  onClick={() => onIssueClick('conflict')}
+                />
               ) : null}
               {issues.unassigned.length > 0 ? (
-                <button type="button" className="rc-issue-chip is-unassigned" onClick={() => onIssueClick('unassigned')}>
-                  <Icon svg={PersonQuestionIcon} size="small" inherit />
-                  {unassignedHours}h unassigned
-                </button>
+                <Chip
+                  className="rc-issue-chip"
+                  size="small"
+                  color={ISSUE_UNASSIGNED}
+                  icon={PersonQuestionIcon}
+                  label={`${unassignedHours}h unassigned`}
+                  onClick={() => onIssueClick('unassigned')}
+                />
               ) : null}
               {issues.overbudget.length > 0 ? (
-                <button type="button" className="rc-issue-chip is-over" onClick={() => onIssueClick('overbudget')}>
-                  {issues.overbudget.length} {issueKindLabel('overbudget', issues.overbudget.length)}
-                </button>
+                <Chip
+                  className="rc-issue-chip"
+                  size="small"
+                  color={ISSUE_OVER}
+                  label={`${issues.overbudget.length} ${issueKindLabel('overbudget', issues.overbudget.length)}`}
+                  onClick={() => onIssueClick('overbudget')}
+                />
               ) : null}
             </>
           )}
@@ -128,7 +183,13 @@ export function CrewPanel({
                   </Text>
                 </div>
               </div>
-              <div className="rc-crew-track">
+              <div
+                className="rc-crew-track"
+                onPointerDown={onTrackPointerDown}
+                onPointerMove={onTrackPointerMove}
+                onPointerUp={onTrackPointerUp}
+                onPointerCancel={onTrackPointerUp}
+              >
                 <div
                   className="rc-crew-cells"
                   style={

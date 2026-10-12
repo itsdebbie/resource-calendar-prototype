@@ -91,7 +91,7 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { barTone } from './palette'
+import { BAR_FILL_UNASSIGNED, BAR_INK_UNASSIGNED, barTone } from './palette'
 import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
 import { CrewPanel } from './CrewPanel'
 import {
@@ -177,11 +177,56 @@ function barSurface(color: string, ink: string, unassigned = false) {
   return {
     background: tone.fill,
     color: tone.text,
-    ['--rc-bar-color' as string]: color,
-    ['--rc-bar-ink' as string]: ink,
+    ['--rc-bar-color' as string]: tone.fill,
+    ['--rc-bar-ink' as string]: tone.ink,
     ['--rc-bar-text' as string]: tone.text,
     ['--rc-bar-border' as string]: tone.border,
   } as CSSProperties
+}
+
+const TIP_DELAY = 400
+
+function hoverPinX(event: { clientX: number; currentTarget: HTMLElement }) {
+  const rect = event.currentTarget.getBoundingClientRect()
+  const pad = 8
+  const min = Math.max(rect.left, pad)
+  const max = Math.min(rect.right, window.innerWidth - pad)
+  const x = Math.min(Math.max(event.clientX, min), Math.max(min, max))
+  return x - rect.left
+}
+
+function useBarTip() {
+  const [open, setOpen] = useState(false)
+  const [pinX, setPinX] = useState(0)
+  const timer = useRef(0)
+
+  const onPointerEnter = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    setPinX(hoverPinX(event))
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setOpen(true), TIP_DELAY)
+  }, [])
+
+  const hide = useCallback(() => {
+    window.clearTimeout(timer.current)
+    setOpen(false)
+  }, [])
+
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  return { open, pinX, onPointerEnter, onPointerLeave: hide, hide }
+}
+
+function BarTip({ content, open, pinX }: { content: string; open: boolean; pinX: number }) {
+  return (
+    <Tooltip open={open} delay={0} placement="top">
+      <Tooltip.Trigger>
+        <span className="rc-bar-tip-anchor" style={{ left: pinX }} aria-hidden role="presentation" tabIndex={-1} />
+      </Tooltip.Trigger>
+      <Tooltip.Content>
+        <span className="rc-bar-tip-copy">{content}</span>
+      </Tooltip.Content>
+    </Tooltip>
+  )
 }
 
 function Name({ children, title }: { children: string; title?: string }) {
@@ -815,6 +860,7 @@ export function ResourceCalendar() {
                   onIssueClick={openFinder}
                   onFinderNav={stepFinder}
                   onFinderClose={() => setFinder(null)}
+                  onScrollBy={timeline.scrollBy}
                   shown={showAllCrew ? people.length : crewCounts.shown}
                   total={crewCounts.total}
                 />
@@ -917,7 +963,10 @@ function KeyPopover() {
             Confirmed
           </div>
           <div className="rc-key-row">
-            <span className="rc-key-swatch" style={{ background: '#fff', border: '1px solid #005132' }} />
+            <span
+              className="rc-key-swatch"
+              style={{ background: BAR_FILL_UNASSIGNED, border: `1px solid ${BAR_INK_UNASSIGNED}` }}
+            />
             Unassigned · Needs a tech
           </div>
           <div className="rc-key-row">
@@ -1510,6 +1559,8 @@ function ShortChip({
   const selectedNow = rows.some((row) => selectedKeys.has(row.id)) && editable
   const dragging = rows.some((row) => dragIds.has(row.id))
   const [open, setOpen] = useState(false)
+  const [popOpen, setPopOpen] = useState(false)
+  const tip = useBarTip()
   if (!style.visible) return null
 
   const wrapStyle = {
@@ -1519,12 +1570,31 @@ function ShortChip({
   } as CSSProperties
 
   return (
-    <Popover placement="bottom" open={open || undefined} onClose={() => setOpen(false)} openOnHover>
+    <Popover
+      placement="bottom"
+      open={open || undefined}
+      onClose={() => {
+        setOpen(false)
+        setPopOpen(false)
+      }}
+      onOpenAnimationStart={() => {
+        setPopOpen(true)
+        tip.hide()
+      }}
+      openOnHover
+    >
       <Popover.Trigger>
         {(props) => {
           const { ref, onClick, ...rest } = props
           return (
-            <div {...rest} ref={ref as never} className="rc-chip-wrap" style={wrapStyle}>
+            <div
+              {...rest}
+              ref={ref as never}
+              className="rc-chip-wrap"
+              style={wrapStyle}
+              onPointerEnter={tip.onPointerEnter}
+              onPointerLeave={tip.onPointerLeave}
+            >
               <div
                 role="button"
                 tabIndex={-1}
@@ -1538,6 +1608,7 @@ function ShortChip({
                 }}
                 onPointerDown={(event) => {
                   if (!editable || event.button !== 0) return
+                  tip.hide()
                   const first = rows[0]
                   if (first) onBarPointerDown(event, first.id, first, 'move', rows.map((row) => row.id))
                 }}
@@ -1546,6 +1617,7 @@ function ShortChip({
                   {conflict ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
                   <span className="rc-bar-name">{label}</span>
                 </span>
+                <BarTip content={label} open={tip.open && !popOpen && !dragging} pinX={tip.pinX} />
               </div>
             </div>
           )
@@ -1757,6 +1829,7 @@ function BarSegment({
 }) {
   const { clipLeft, viewPx, colW, onEditInWeek } = useGantt()
   const [popOpen, setPopOpen] = useState(false)
+  const tip = useBarTip()
   const style = barStyle(seg.start, seg.end, columns)
   if (!style.visible) return null
   const sliver = segmentIsSliver(seg.start, seg.end, zoom)
@@ -1814,10 +1887,12 @@ function BarSegment({
           className="rc-bar-handle"
           onPointerDown={(event) => {
             event.stopPropagation()
+            tip.hide()
             onBarPointerDown(event, id, span, 'resize')
           }}
         />
       ) : null}
+      <BarTip content={tooltip} open={tip.open && !popOpen && !dragging} pinX={tip.pinX} />
     </>
   )
 
@@ -1832,8 +1907,6 @@ function BarSegment({
           {(props) => {
             const { ref, onClick, ...rest } = props
             return (
-            <Tooltip openOnHover delay={400} placement="top" open={popOpen ? false : undefined}>
-              <Tooltip.Trigger>
                 <div
                   {...rest}
                   ref={ref as never}
@@ -1842,16 +1915,16 @@ function BarSegment({
                   data-span={id}
                   className={barClass}
                   style={barStyleVars}
+                  onPointerEnter={tip.onPointerEnter}
+                  onPointerLeave={tip.onPointerLeave}
                   onClick={(event) => {
                     event.stopPropagation()
+                    tip.hide()
                     onClick(event)
                   }}
                 >
                   {inner}
                 </div>
-              </Tooltip.Trigger>
-              <Tooltip.Content>{tooltip}</Tooltip.Content>
-            </Tooltip>
             )
           }}
         </Popover.Trigger>
@@ -1877,20 +1950,21 @@ function BarSegment({
   }
 
   return (
-    <Tooltip openOnHover delay={400} placement="top">
-      <Tooltip.Trigger>
         <div
           role="button"
           tabIndex={-1}
           data-span={id}
           className={barClass}
           style={barStyleVars}
+          onPointerEnter={tip.onPointerEnter}
+          onPointerLeave={tip.onPointerLeave}
           onClick={(event) => {
             event.stopPropagation()
             if (!dragging) onBarClick(id, event)
           }}
           onPointerDown={(event) => {
             if (!editable || event.button !== 0) return
+            tip.hide()
             onBarPointerDown(event, id, span, wholeBar ? 'move' : 'day')
           }}
           onKeyDown={(event) => {
@@ -1902,8 +1976,5 @@ function BarSegment({
         >
           {inner}
         </div>
-      </Tooltip.Trigger>
-      <Tooltip.Content>{tooltip}</Tooltip.Content>
-    </Tooltip>
   )
 }

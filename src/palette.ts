@@ -16,11 +16,14 @@ export type ProjectSwatch = { fill: string; ink: string }
 /** Prototype default foreground (Anvil2 `--a2-foreground-color-default`). */
 export const BAR_TEXT_DARK = '#040404'
 export const BAR_TEXT_LIGHT = '#ffffff'
-export const BAR_FILL_UNASSIGNED = '#ffffff'
+/** Anvil2 `ColorNeutral500` / `--a2-color-neutral-500`. Not project blue-grey `#6a7a85`. */
+export const BAR_FILL_UNASSIGNED = '#707070'
+export const BAR_FILL_UNASSIGNED_TOKEN = '--a2-color-neutral-500'
+/** Anvil2 `ColorNeutral600` / `--a2-color-neutral-600`, used as unassigned ink. */
+export const BAR_INK_UNASSIGNED = '#545454'
 
 const TEXT_MIN = 4.5
 const ICON_MIN = 3
-const BORDER_MIN = 3
 
 export function swatch(family: keyof typeof PROJECT_COLORS): ProjectSwatch {
   const pair = PROJECT_COLORS[family]
@@ -80,19 +83,12 @@ export type BarTone = {
   borderMeets: boolean
 }
 
-function pickUnassignedBorder(fill: string, ink: string) {
-  const fillRatio = contrastRatio(fill, BAR_FILL_UNASSIGNED)
-  const inkRatio = contrastRatio(ink, BAR_FILL_UNASSIGNED)
-  return inkRatio >= fillRatio
-    ? { border: ink, borderRatio: inkRatio }
-    : { border: fill, borderRatio: fillRatio }
-}
-
-/** Solid 500 fill (or white for unassigned) plus WCAG-picked text/icon color. */
+/** Solid 500 fill (or Anvil Neutral 500 for unassigned) plus WCAG-picked text/icon color. */
 export function barTone(fill: string, ink: string, unassigned = false): BarTone {
   const surface = unassigned ? BAR_FILL_UNASSIGNED : fill
+  const toneInk = unassigned ? BAR_INK_UNASSIGNED : ink
   const picked = pickOnFill(surface)
-  const border = unassigned ? pickUnassignedBorder(fill, ink) : { border: ink, borderRatio: contrastRatio(ink, surface) }
+  const borderRatio = contrastRatio(toneInk, surface)
   const icon = picked.color
   const iconRatio = picked.ratio
   return {
@@ -103,16 +99,17 @@ export function barTone(fill: string, ink: string, unassigned = false): BarTone 
     icon,
     iconRatio,
     iconMeets: iconRatio >= ICON_MIN,
-    ink,
-    border: border.border,
-    borderRatio: border.borderRatio,
-    borderMeets: unassigned ? border.borderRatio >= BORDER_MIN : true,
+    ink: toneInk,
+    border: toneInk,
+    borderRatio,
+    borderMeets: true,
   }
 }
 
 export type ContrastRow = {
-  family: keyof typeof PROJECT_COLORS
+  family: string
   fill: string
+  token?: string
   text: string
   textRatio: number
   textMeets: boolean
@@ -122,7 +119,7 @@ export type ContrastRow = {
 }
 
 export function projectContrastTable(): ContrastRow[] {
-  return (Object.keys(PROJECT_COLORS) as (keyof typeof PROJECT_COLORS)[]).map((family) => {
+  const rows: ContrastRow[] = (Object.keys(PROJECT_COLORS) as (keyof typeof PROJECT_COLORS)[]).map((family) => {
     const tone = barTone(PROJECT_COLORS[family][500], PROJECT_COLORS[family][600])
     return {
       family,
@@ -135,4 +132,17 @@ export function projectContrastTable(): ContrastRow[] {
       iconMeets: tone.iconMeets,
     }
   })
+  const unassigned = barTone(BAR_FILL_UNASSIGNED, BAR_INK_UNASSIGNED, true)
+  rows.push({
+    family: 'unassigned',
+    fill: unassigned.fill,
+    token: BAR_FILL_UNASSIGNED_TOKEN,
+    text: unassigned.text,
+    textRatio: unassigned.textRatio,
+    textMeets: unassigned.textMeets,
+    icon: unassigned.icon,
+    iconRatio: unassigned.iconRatio,
+    iconMeets: unassigned.iconMeets,
+  })
+  return rows
 }
