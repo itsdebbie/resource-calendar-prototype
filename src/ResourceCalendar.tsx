@@ -91,7 +91,7 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { tintFill } from './palette'
+import { barTone } from './palette'
 import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
 import { CrewPanel } from './CrewPanel'
 import {
@@ -170,6 +170,18 @@ function useGantt() {
   const ctx = useContext(GanttContext)
   if (!ctx) throw new Error('Gantt context missing')
   return ctx
+}
+
+function barSurface(color: string, ink: string, unassigned = false) {
+  const tone = barTone(color, ink, unassigned)
+  return {
+    background: tone.fill,
+    color: tone.text,
+    ['--rc-bar-color' as string]: color,
+    ['--rc-bar-ink' as string]: ink,
+    ['--rc-bar-text' as string]: tone.text,
+    ['--rc-bar-border' as string]: tone.border,
+  } as CSSProperties
 }
 
 function Name({ children, title }: { children: string; title?: string }) {
@@ -924,7 +936,7 @@ function KeyPopover() {
               .map((p) => (
                 <Tooltip openOnHover key={p.id}>
                   <Tooltip.Trigger>
-                    <span className="rc-key-swatch" style={{ background: tintFill(p.color), border: `1px solid ${p.ink}` }} />
+                    <span className="rc-key-swatch" style={{ background: p.color, border: `1px solid ${p.ink}` }} />
                   </Tooltip.Trigger>
                   <Tooltip.Content>{p.name}</Tooltip.Content>
                 </Tooltip>
@@ -1518,12 +1530,7 @@ function ShortChip({
                 tabIndex={-1}
                 data-span={id}
                 className={`rc-bar is-chip${selectedNow ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}`}
-                style={{
-                  background: tintFill(color),
-                  color: ink,
-                  '--rc-bar-color': color,
-                  '--rc-bar-ink': ink,
-                } as CSSProperties}
+                style={barSurface(color, ink)}
                 onClick={(event) => {
                   event.stopPropagation()
                   onClick(event)
@@ -1536,7 +1543,7 @@ function ShortChip({
                 }}
               >
                 <span className="rc-bar-label">
-                  {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
+                  {conflict ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
                   <span className="rc-bar-name">{label}</span>
                 </span>
               </div>
@@ -1767,17 +1774,12 @@ function BarSegment({
   const selectedNow = Boolean(selected && (editable || selected))
   const hideInner = Boolean(colorOnly || (floatLabel && !unassigned))
   const overflowRight = leftPx + widthPx + 96 > viewLeft + viewPx
-  const fill = unassigned ? '#fff' : tintFill(color)
-
   const barClass = `rc-bar${unassigned ? ' is-unassigned' : ''}${selectedNow ? ' is-selected' : ''}${sliver || colorOnly ? ' is-sliver' : ''}${colorOnly ? ' is-color-only' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}${floatLabel ? ' is-short-float' : ''}`
   const barStyleVars = {
     left: `calc(${style.left} + 3px)`,
     width: `calc(${style.width} - 6px)`,
-    background: fill,
-    color: ink,
+    ...barSurface(color, ink, unassigned),
     '--rc-lane': lane,
-    '--rc-bar-color': color,
-    '--rc-bar-ink': ink,
     '--rc-label-shift': `${shift}px`,
   } as CSSProperties
 
@@ -1785,16 +1787,16 @@ function BarSegment({
     <>
       {!hideInner && showLabel && (name || hours) && !sliver ? (
         <span className="rc-bar-label">
-          {unassigned ? <Icon svg={PersonQuestionIcon} size="small" inherit /> : null}
-          {confirmed ? <Icon svg={CalendarCheckIcon} size="small" inherit /> : null}
-          {conflict ? <Icon svg={WarningIcon} size="small" inherit /> : null}
+          {unassigned ? <Icon svg={PersonQuestionIcon} size="small" inherit className="rc-bar-glyph" /> : null}
+          {confirmed ? <Icon svg={CalendarCheckIcon} size="small" inherit className="rc-bar-glyph" /> : null}
+          {conflict ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
           {name ? <span className="rc-bar-name">{name}</span> : null}
           {showHours && hours ? <span className="rc-bar-hours">{hours}</span> : null}
         </span>
       ) : (
         <>
-          {unassigned && !colorOnly ? <Icon svg={PersonQuestionIcon} size="small" inherit /> : null}
-          {confirmed && !colorOnly ? <Icon svg={CalendarCheckIcon} size="small" inherit /> : null}
+          {unassigned && !colorOnly ? <Icon svg={PersonQuestionIcon} size="small" inherit className="rc-bar-glyph" /> : null}
+          {confirmed && !colorOnly ? <Icon svg={CalendarCheckIcon} size="small" inherit className="rc-bar-glyph" /> : null}
         </>
       )}
       {floatLabel && showLabel ? (
