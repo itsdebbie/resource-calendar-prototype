@@ -22,21 +22,29 @@ function extentAround(zoom: Zoom, iso: string, extra = 24) {
   return { min: idx - BUFFER_COLS, max: idx + BUFFER_COLS + extra }
 }
 
-function visiblePx(el: HTMLElement) {
-  return Math.min(2200, Math.max(320, Math.min(el.clientWidth, window.innerWidth) - GUTTER))
+function visiblePx(el: HTMLElement, gutter: number) {
+  return Math.min(2200, Math.max(320, Math.min(el.clientWidth, window.innerWidth) - gutter))
 }
 
-export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElement | null>) {
+export function useTimelineScroll(
+  zoom: Zoom,
+  scrollRef: RefObject<HTMLDivElement | null>,
+  options?: { gutter?: number; initialIso?: string },
+) {
+  const gutter = options?.gutter ?? GUTTER
+  const gutterRef = useRef(gutter)
+  gutterRef.current = gutter
+  const startIso = options?.initialIso ?? DEMO_TODAY
   const [viewportPx, setViewportPx] = useState(980)
   const colW = columnWidth(zoom, viewportPx)
-  const anchorRef = useRef({ iso: DEMO_TODAY, offsetPx: 0 })
-  const [extent, setExtent] = useState(() => extentAround(zoom, DEMO_TODAY))
-  const todayIndex = columnIndexAt(zoom, utc(DEMO_TODAY))
+  const anchorRef = useRef({ iso: startIso, offsetPx: 0 })
+  const [extent, setExtent] = useState(() => extentAround(zoom, startIso))
+  const startIndex = columnIndexAt(zoom, utc(startIso))
   const [viewWindow, setViewWindow] = useState<TimeWindow>(() => ({
-    start: columnAtIndex(zoom, todayIndex).start,
-    end: columnAtIndex(zoom, todayIndex + 13).end,
+    start: columnAtIndex(zoom, startIndex).start,
+    end: columnAtIndex(zoom, startIndex + 13).end,
   }))
-  const [firstVisible, setFirstVisible] = useState(todayIndex)
+  const [firstVisible, setFirstVisible] = useState(startIndex)
   const [scrollLeft, setScrollLeft] = useState(0)
   const [alignNonce, setAlignNonce] = useState(0)
 
@@ -56,7 +64,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
   const slideRef = useRef(false)
 
   const columns = useMemo(() => columnsInExtent(zoom, extent.min, extent.max), [zoom, extent.min, extent.max])
-  const canvasWidth = GUTTER + columns.length * colW
+  const canvasWidth = gutter + columns.length * colW
   const visibleCount = Math.max(8, Math.ceil(viewportPx / colW))
 
   const publishWindow = useCallback((el: HTMLElement) => {
@@ -64,7 +72,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const width = colWRef.current
     const z = zoomRef.current
     const sl = el.scrollLeft
-    const count = Math.max(8, Math.ceil(visiblePx(el) / width))
+    const count = Math.max(8, Math.ceil(visiblePx(el, gutterRef.current) / width))
     const i0 = Math.min(max, Math.max(min, min + Math.floor(sl / width)))
     const i1 = Math.min(max, Math.max(i0, i0 + count - 1))
     const start = columnAtIndex(z, i0).start
@@ -82,7 +90,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       const el = scrollRef.current
       if (!el) return DEMO_TODAY
       const rect = el.getBoundingClientRect()
-      const x = clientX - rect.left + el.scrollLeft - GUTTER
+      const x = clientX - rect.left + el.scrollLeft - gutterRef.current
       return dateAtWorldX(zoom, extent.min, colW, x)
     },
     [scrollRef, zoom, extent.min, colW],
@@ -92,7 +100,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const el = scrollRef.current
     if (!el) return DEMO_TODAY
     const viewW = Math.min(el.clientWidth, window.innerWidth)
-    const x = el.scrollLeft + Math.max(40, (viewW - GUTTER) / 2)
+    const x = el.scrollLeft + Math.max(40, (viewW - gutterRef.current) / 2)
     return dateAtWorldX(zoom, extent.min, colW, x)
   }, [scrollRef, zoom, extent.min, colW])
 
@@ -148,7 +156,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
         alignedAt.current = el.scrollLeft
         const leftIdx = extentRef.current.min + Math.floor(el.scrollLeft / colWRef.current)
         expandToIndex(leftIdx)
-        expandToIndex(leftIdx + Math.ceil(visiblePx(el) / colWRef.current))
+        expandToIndex(leftIdx + Math.ceil(visiblePx(el, gutterRef.current) / colWRef.current))
       }
       publishWindow(el)
     },
@@ -161,7 +169,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
       if (!el) return 0
       const rect = el.getBoundingClientRect()
       const viewW = Math.min(el.clientWidth, window.innerWidth)
-      const left = rect.left + GUTTER + EDGE_PX
+      const left = rect.left + gutterRef.current + EDGE_PX
       const right = rect.left + viewW - EDGE_PX
       let dx = 0
       if (clientX > right) dx = Math.min(36, 12 + (clientX - right) / 3)
@@ -176,7 +184,7 @@ export function useTimelineScroll(zoom: Zoom, scrollRef: RefObject<HTMLDivElemen
     const el = scrollRef.current
     if (!el) return
     const measure = () => {
-      const next = visiblePx(el)
+      const next = visiblePx(el, gutterRef.current)
       setViewportPx((prev) => (Math.abs(prev - next) < 2 ? prev : next))
     }
     measure()
