@@ -1216,7 +1216,7 @@ function PersonBlock({
   const resolved = assignments.map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
   const meta =
     personId === 'unassigned'
-      ? { text: 'No technician', detail: rows.map((r) => r.label).join(' + '), over: false }
+      ? { text: 'Needs a tech', detail: rows.map((r) => r.label).join(' + '), over: false }
       : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
   const grouped = projects
     .filter((p) => !p.leftover && rows.some((r) => r.projectId === p.id))
@@ -1293,7 +1293,7 @@ function UnassignedRow({ rows }: { rows: Assignment[] }) {
         <div className="rc-gutter-copy">
           <Name>Unassigned</Name>
           <Text size="small" subdued>
-            No technician · {rows.map((r) => r.label).join(' + ')}
+            Needs a tech · {rows.map((r) => r.label).join(' + ')}
           </Text>
         </div>
       </div>
