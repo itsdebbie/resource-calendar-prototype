@@ -3,11 +3,17 @@ body,
 #root {
   margin: 0;
   height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
   font-family: var(--a2-font-family-base, 'Nunito Sans', sans-serif);
 }
 
 .app-shell {
   min-height: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
   background: var(--a2-background-color-strong, #f9f9f9);
 }
 
@@ -15,4 +21,5 @@ body,
   padding: 0 16px 24px;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
 }

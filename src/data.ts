@@ -6,6 +6,8 @@ export type Person = {
   name: string
   role: string
   color: string
+  /** Daily shift length in hours. Sample values for the prototype, not a live roster. */
+  shiftHours: number
   leftover?: boolean
 }
 
@@ -30,6 +32,7 @@ export type Phase = {
   name: string
   start: string
   end: string
+  offDays?: string[]
   color: string
   budgetHours?: number
   scheduledHours?: number
@@ -41,18 +44,20 @@ export type Assignment = {
   projectId: string
   personId: string | 'unassigned'
   phaseId?: string
+  title?: string
   label: string
   start: string
   end: string
+  offDays?: string[]
   confirmed?: boolean
   kind?: 'unassigned'
 }
 
 export const people: Person[] = [
-  { id: 'david', name: 'David', role: 'Lead tech', color: '#0265dc' },
-  { id: 'danny', name: 'Danny', role: 'Installer', color: '#077e50' },
-  { id: 'kevin', name: 'Kevin', role: 'Installer', color: '#c98600' },
-  { id: 'chris', name: 'Chris', role: 'Available · 40h/w', color: '#6b5ce7', leftover: true },
+  { id: 'david', name: 'David', role: 'Lead tech', color: '#0265dc', shiftHours: 10 },
+  { id: 'danny', name: 'Danny', role: 'Installer', color: '#077e50', shiftHours: 8 },
+  { id: 'kevin', name: 'Kevin', role: 'Installer', color: '#c98600', shiftHours: 10 },
+  { id: 'chris', name: 'Chris', role: 'Available · 40h/w', color: '#6b5ce7', shiftHours: 8, leftover: true },
 ]
 
 export const projects: Project[] = [
@@ -199,6 +204,15 @@ export const assignments: Assignment[] = [
     end: '2026-03-06',
   },
   {
+    id: 'kevin-site-check',
+    projectId: 'summit',
+    personId: 'kevin',
+    title: 'Site check',
+    label: '8h',
+    start: '2026-01-15',
+    end: '2026-01-15',
+  },
+  {
     id: 'kevin-foundation',
     projectId: 'summit',
     personId: 'kevin',
@@ -281,6 +295,14 @@ export const assignments: Assignment[] = [
     end: '2026-04-24',
     confirmed: true,
   },
+  {
+    id: 'danny-apex',
+    projectId: 'apex',
+    personId: 'danny',
+    label: '40h',
+    start: '2026-03-09',
+    end: '2026-03-20',
+  },
 ]
 
 export function personById(id: string) {
@@ -305,12 +327,123 @@ export function hoursCaption(scheduled?: number, budget?: number) {
   return `${scheduled} / ${budget}h`
 }
 
-export function weeklyHours(personId: string) {
-  if (personId === 'david') return { booked: 60, cap: 40, over: true, detail: '40h/w on Summit + 20h on Apex' }
-  if (personId === 'danny') return { booked: 40, cap: 40, over: false, detail: '40h/w' }
-  if (personId === 'kevin') return { booked: 20, cap: 40, over: false, detail: '20h/w' }
-  if (personId === 'chris') return { booked: 0, cap: 40, over: false, detail: 'Available · 40h/w' }
-  return { booked: 0, cap: 40, over: false, detail: '' }
+/** Daily shift length. Sample `shiftHours` on each person; default 8 if omitted. */
+export function dailyShiftHours(personId: string) {
+  if (personId === 'unassigned') return 0
+  return personById(personId)?.shiftHours ?? 8
+}
+
+export function weeklyCap(personId: string) {
+  return dailyShiftHours(personId) * 5
+}
+
+/** 40h labels are weekly; 8h (or anything ≤12) is treated as hours that day. */
+export function hoursPerWorkday(row: Assignment) {
+  const n = parseInt(row.label, 10) || 0
+  if (n <= 12) return n
+  return n / 5
+}
+
+function isoFromTs(ts: number) {
+  return new Date(ts).toISOString().slice(0, 10)
+}
+
+export function workdaysInWindow(window: { start: number; end: number }) {
+  let n = 0
+  for (let t = window.start; t < window.end; t += 86400000) {
+    const day = new Date(t).getUTCDay()
+    if (day !== 0 && day !== 6) n += 1
+  }
+  return n
+}
+
+export function assignmentWorkdaysInWindow(row: Assignment, window: { start: number; end: number }) {
+  const off = new Set(row.offDays)
+  const a = Math.max(Date.parse(`${row.start}T00:00:00Z`), window.start)
+  const b = Math.min(Date.parse(`${row.end}T00:00:00Z`) + 86400000, window.end)
+  if (b <= a) return 0
+  let n = 0
+  for (let t = a; t < b; t += 86400000) {
+    const day = new Date(t).getUTCDay()
+    if (day === 0 || day === 6) continue
+    if (off.has(isoFromTs(t))) continue
+    n += 1
+  }
+  return n
+}
+
+export function personHoursInWindow(
+  personId: string,
+  rows: Assignment[],
+  window: { start: number; end: number },
+  rangeLabel?: string,
+) {
+  const mine = rows.filter((row) => row.personId === personId)
+  const booked = mine.reduce((sum, row) => sum + hoursPerWorkday(row) * assignmentWorkdaysInWindow(row, window), 0)
+  const days = workdaysInWindow(window)
+  const shift = dailyShiftHours(personId)
+  const cap = shift * days
+  const bookedR = Math.round(booked)
+  const capR = Math.round(cap)
+  const names = mine
+    .filter((row) => assignmentWorkdaysInWindow(row, window) > 0)
+    .map((row) => {
+      const project = projectById(row.projectId)?.name.split(' ')[0] ?? ''
+      const name = row.title ?? phaseById(row.phaseId)?.name
+      return [name, row.label, project].filter(Boolean).join(' ')
+    })
+  const breakdown = `${bookedR}h scheduled in the visible dates / ${capR}h available (${days} workdays × ${shift}h)${names.length ? ` · ${names.join(' + ')}` : ''}`
+  return {
+    booked: bookedR,
+    cap: capR,
+    over: capR > 0 && bookedR > capR,
+    text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h in view`,
+    detail: personId === 'unassigned' ? names.join(' + ') : [rangeLabel, `${shift}h shift`, breakdown].filter(Boolean).join('\n'),
+  }
+}
+
+/** Conflict when booked hours on a day exceed that person's shift length, not for every overlap. */
+export function overCapacityAssignmentIds(personId: string, rows: Assignment[]) {
+  const cap = dailyShiftHours(personId)
+  const ids = new Set<string>()
+  if (cap <= 0) return ids
+  const dayHours = new Map<string, number>()
+  for (const row of rows) {
+    const h = hoursPerWorkday(row)
+    const off = new Set(row.offDays)
+    const end = Date.parse(`${row.end}T00:00:00Z`)
+    for (let t = Date.parse(`${row.start}T00:00:00Z`); t <= end; t += 86400000) {
+      const day = new Date(t).getUTCDay()
+      if (day === 0 || day === 6) continue
+      const iso = isoFromTs(t)
+      if (off.has(iso)) continue
+      dayHours.set(iso, (dayHours.get(iso) ?? 0) + h)
+    }
+  }
+  for (const row of rows) {
+    const off = new Set(row.offDays)
+    const end = Date.parse(`${row.end}T00:00:00Z`)
+    for (let t = Date.parse(`${row.start}T00:00:00Z`); t <= end; t += 86400000) {
+      const day = new Date(t).getUTCDay()
+      if (day === 0 || day === 6) continue
+      const iso = isoFromTs(t)
+      if (off.has(iso)) continue
+      if ((dayHours.get(iso) ?? 0) > cap + 0.05) {
+        ids.add(row.id)
+        break
+      }
+    }
+  }
+  return ids
+}
+
+export function hoursTooltipLine(scheduled?: number, budget?: number, actual?: number, fallback?: string) {
+  const bits: string[] = []
+  if (scheduled != null && budget != null) bits.push(`${scheduled} / ${budget}h scheduled`)
+  else if (scheduled != null) bits.push(`${scheduled}h scheduled`)
+  else if (fallback) bits.push(fallback)
+  if (actual != null) bits.push(`${actual}h actual`)
+  return bits.join(' · ') || undefined
 }
 
 /** 20h bars are a half day; 40h is a full 9–5. */
@@ -318,10 +451,16 @@ export function clockLabel(row: { label: string }) {
   return row.label.startsWith('20') ? '9a–1p' : '9a–5p'
 }
 
-export function zoomBarLabel(zoom: Zoom, row: Assignment) {
+export function zoomBarParts(zoom: Zoom, row: Assignment) {
   const phase = phaseById(row.phaseId)
+  const name = row.title ?? phase?.name ?? projectById(row.projectId)?.name.replace(' Tentative', '')
   const clock = clockLabel(row)
-  if (zoom === 'days') return phase ? `${phase.name} · ${clock}` : clock
-  if (zoom === 'weeks') return phase ? `${phase.name} · ${clock} · ${row.label}` : `${clock} · ${row.label}`
-  return phase ? `${phase.name} · ${row.label}` : row.label
+  if (zoom === 'days') return { name, hours: clock }
+  if (zoom === 'weeks') return { name, hours: `${clock} · ${row.label}` }
+  return { name, hours: row.label }
+}
+
+export function zoomBarLabel(zoom: Zoom, row: Assignment) {
+  const { name, hours } = zoomBarParts(zoom, row)
+  return [name, hours].filter(Boolean).join(' · ')
 }
