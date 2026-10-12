@@ -1790,8 +1790,12 @@ function BarSegment({
           {unassigned ? <Icon svg={PersonQuestionIcon} size="small" inherit className="rc-bar-glyph" /> : null}
           {confirmed ? <Icon svg={CalendarCheckIcon} size="small" inherit className="rc-bar-glyph" /> : null}
           {conflict ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
-          {name ? <span className="rc-bar-name">{name}</span> : null}
-          {showHours && hours ? <span className="rc-bar-hours">{hours}</span> : null}
+          {name ? (
+            <span className="rc-bar-name">
+              {unassigned && showHours && hours ? `${name} · ${hours}` : name}
+            </span>
+          ) : null}
+          {showHours && hours && !unassigned ? <span className="rc-bar-hours">{hours}</span> : null}
         </span>
       ) : (
         <>
@@ -1802,7 +1806,7 @@ function BarSegment({
       {floatLabel && showLabel ? (
         <span className={`rc-float-label${overflowRight ? ' is-left' : ''}`}>
           {name}
-          {hours ? ` ${hours}` : ''}
+          {hours ? (unassigned ? ` · ${hours}` : ` ${hours}`) : ''}
         </span>
       ) : null}
       {editable && wholeBar && !colorOnly && !floatLabel ? (
