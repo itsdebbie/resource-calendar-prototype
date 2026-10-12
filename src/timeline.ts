@@ -16,7 +16,9 @@ export type Span = { start: string; end: string; offDays: string[] }
 export type Band = { id: string; label: string; startIndex: number; span: number }
 
 export const DEMO_TODAY = '2026-01-12'
-export const GUTTER = 280
+export const GUTTER = 360
+export const SHORT_BAR_PX = 60
+export const CREW_PANEL_KEY = 'rc-crew-panel-open'
 export const DAY_MS = 86400000
 export const BUFFER_COLS = 40
 export const EDGE_PX = 56
@@ -441,10 +443,43 @@ export function isDayZoom(zoom: Zoom) {
   return zoom === 'days'
 }
 
-/** Pixel x for the today guide. Day view is centered in the column so it does not read as a grid line. */
+/** Pixel x for the today guide: center of the column that contains today, in every zoom. */
 export function todayMarkerX(zoom: Zoom, extentMin: number, colW: number) {
-  const x = worldXForDate(zoom, extentMin, colW, DEMO_TODAY)
-  return zoom === 'days' ? x + colW / 2 : x
+  const idx = columnIndexAt(zoom, utc(DEMO_TODAY))
+  return (idx - extentMin) * colW + colW / 2
+}
+
+export function mondayOf(iso: string) {
+  const ts = utc(iso)
+  const day = new Date(ts).getUTCDay() || 7
+  return isoFromTs(ts - (day - 1) * DAY_MS)
+}
+
+export function weekIndexOf(iso: string) {
+  return columnIndexAt('weeks', utc(iso))
+}
+
+export function weekendSlices(col: Column, extentMin: number, colW: number) {
+  const slices: { left: number; width: number }[] = []
+  const span = col.end - col.start
+  if (span <= 0) return slices
+  for (let t = col.start; t < col.end; t += DAY_MS) {
+    const day = new Date(t).getUTCDay()
+    if (day !== 0 && day !== 6) continue
+    slices.push({
+      left: (col.index - extentMin) * colW + ((t - col.start) / span) * colW,
+      width: (DAY_MS / span) * colW,
+    })
+  }
+  return slices
+}
+
+export function barPixelBox(startIso: string, endIso: string, columns: Column[], colW: number) {
+  const style = barStyle(startIso, endIso, columns)
+  const timelineW = columns.length * colW
+  const leftPx = (Number.parseFloat(style.left) / 100) * timelineW + 3
+  const widthPx = Math.max(4, (Number.parseFloat(style.width) / 100) * timelineW - 6)
+  return { ...style, leftPx, widthPx, rightPx: leftPx + widthPx }
 }
 
 export function isEditableZoom(zoom: Zoom) {
