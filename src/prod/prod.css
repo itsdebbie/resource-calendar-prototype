@@ -181,11 +181,6 @@
   position: relative;
 }
 
-.prod-page.is-schedule .prod-board {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
 .prod-page.has-panel .prod-board {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
@@ -460,6 +455,19 @@
   outline-offset: 1px;
 }
 
+.prod-bar-cell {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  pointer-events: none;
+  box-sizing: border-box;
+  border-radius: 4px;
+}
+
+.prod-bar-cell.is-on {
+  box-shadow: inset 0 0 0 2px #141414;
+}
+
 .prod-bar.is-dragging {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
   z-index: 5;
@@ -536,23 +544,6 @@
   border-radius: 4px;
   pointer-events: none;
   white-space: nowrap;
-}
-
-.prod-side {
-  width: 28px;
-  flex: none;
-  background: #fff;
-  border: 1px solid #c4c4c4;
-  border-left: 0;
-  border-radius: 0 12px 12px 0;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: #707070;
-  letter-spacing: 0.02em;
 }
 
 .prod-edit {
@@ -633,21 +624,6 @@
   gap: 12px;
   font-size: 14px;
   font-weight: 600;
-}
-
-.prod-tray-pill {
-  width: 36px;
-  height: 4px;
-  border-radius: 99px;
-  background: #707070;
-  margin: 0 auto;
-}
-
-.prod-tray-end {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-  opacity: 0.7;
 }
 
 body.prod-grabbing,
