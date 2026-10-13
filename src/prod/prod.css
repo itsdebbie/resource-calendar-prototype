@@ -232,10 +232,6 @@
   overflow: hidden;
 }
 
-.prod-row .prod-gutter {
-  position: sticky;
-}
-
 .prod-head .prod-gutter {
   background: #f4f4f4;
   font-size: 12px;
@@ -258,24 +254,6 @@
 
 .prod-gutter.is-group .prod-name {
   font-weight: 700;
-}
-
-.prod-strips {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  height: 100%;
-  display: flex;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.prod-strip {
-  width: 4px;
-  height: 100%;
-  flex: none;
-  display: block;
 }
 
 .prod-wbs {
