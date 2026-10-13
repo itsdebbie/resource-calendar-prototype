@@ -16,6 +16,7 @@ import {
   DateFieldSingle,
   Dialog,
   Icon,
+  NumberField,
   Popover,
   Switch,
   Tab,
@@ -160,6 +161,68 @@ function toDayIso(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : ''
 }
 
+function eachDay(start: string, end: string) {
+  const out: string[] = []
+  for (let t = utc(start); t <= utc(end); t += 86400000) out.push(isoFromTs(t))
+  return out
+}
+
+function cellId(barId: string, iso: string) {
+  return `${barId}:${iso}`
+}
+
+function parseCell(id: string) {
+  const i = id.indexOf(':')
+  if (i < 0) return null
+  return { barId: id.slice(0, i), iso: id.slice(i + 1) }
+}
+
+function clampIso(iso: string, start: string, end: string) {
+  if (utc(iso) < utc(start)) return start
+  if (utc(iso) > utc(end)) return end
+  return iso
+}
+
+function barDays(bar: ProdBar) {
+  return eachDay(bar.start, bar.end)
+}
+
+function keepCellsInRange(prev: Set<string>, ids: Set<string>, start: string, end: string) {
+  const mapped = new Set<string>()
+  for (const key of prev) {
+    const parsed = parseCell(key)
+    if (!parsed) continue
+    if (!ids.has(parsed.barId)) mapped.add(key)
+    else if (utc(parsed.iso) >= utc(start) && utc(parsed.iso) <= utc(end)) mapped.add(key)
+  }
+  return mapped
+}
+
+function removeDaysFromBar(bar: ProdBar, days: Set<string>): ProdBar[] {
+  const remaining = barDays(bar).filter((iso) => !days.has(iso))
+  if (!remaining.length) return []
+  const spans: { start: string; end: string }[] = []
+  let spanStart = remaining[0]!
+  let prev = remaining[0]!
+  for (let i = 1; i < remaining.length; i += 1) {
+    const iso = remaining[i]!
+    if (diffDays(prev, iso) === 1) {
+      prev = iso
+      continue
+    }
+    spans.push({ start: spanStart, end: prev })
+    spanStart = iso
+    prev = iso
+  }
+  spans.push({ start: spanStart, end: prev })
+  return spans.map((span, index) => ({
+    ...bar,
+    id: index === 0 ? bar.id : nextBarId(),
+    start: span.start,
+    end: span.end,
+  }))
+}
+
 type DragMode = 'move' | 'resize-start' | 'resize-end'
 type DragState = {
   mode: DragMode
@@ -173,7 +236,7 @@ type DragState = {
   lastY: number
   moved: boolean
 }
-type ClickMods = { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }
+type ClickMods = { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean; wholeBar?: boolean }
 
 function rowAtPoint(clientY: number) {
   const nodes = document.querySelectorAll<HTMLElement>('[data-prod-row]')
@@ -197,6 +260,7 @@ export function ProdPage({ view }: { view: ProdView }) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [dupOpen, setDupOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editStart, setEditStart] = useState(PROD_TODAY)
   const [editEnd, setEditEnd] = useState(PROD_TODAY)
@@ -204,6 +268,10 @@ export function ProdPage({ view }: { view: ProdView }) {
   const [editEndTime, setEditEndTime] = useState(WORKDAY.end)
   const [editNotes, setEditNotes] = useState('')
   const [fullWorkday, setFullWorkday] = useState(true)
+  const [editTab, setEditTab] = useState(0)
+  const [shiftDays, setShiftDays] = useState<number | null>(0)
+  const [dupStart, setDupStart] = useState(PROD_TODAY)
+  const [dupEnd, setDupEnd] = useState(PROD_TODAY)
   const [dragHint, setDragHint] = useState<{ x: number; y: number; label: string } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
@@ -212,6 +280,7 @@ export function ProdPage({ view }: { view: ProdView }) {
   barsRef.current = bars
   const ignoreClick = useRef(false)
   const selectAnchor = useRef<string | null>(null)
+  const dragCellsRef = useRef<string[]>([])
   const edgeDir = useRef(0)
   const edgeSince = useRef(0)
   const timeline = useTimelineScroll('days', scrollRef, { gutter, initialIso: PROD_TODAY })
@@ -227,6 +296,7 @@ export function ProdPage({ view }: { view: ProdView }) {
     setBars((isSchedule ? initialScheduleBars : initialCalendarBars).map((b) => ({ ...b })))
     setSelected(new Set())
     setEditOpen(false)
+    setDupOpen(false)
     setConfirmDelete(false)
     setCollapsed(new Set())
     setDraggingId(null)
@@ -241,18 +311,32 @@ export function ProdPage({ view }: { view: ProdView }) {
     return rows.filter((row) => !rowHidden(row, collapsed))
   }, [rows, collapsed, isSchedule])
 
-  const orderedIds = useMemo(() => {
-    const ids: string[] = []
+  const orderedCells = useMemo(() => {
+    const cells: string[] = []
     for (const row of visibleRows) {
       for (const bar of bars) {
-        if (bar.rowId === row.id && !bar.readOnly) ids.push(bar.id)
+        if (bar.rowId !== row.id || bar.readOnly) continue
+        for (const iso of barDays(bar)) cells.push(cellId(bar.id, iso))
       }
     }
-    return ids
+    return cells
   }, [visibleRows, bars])
 
-  const selectedBars = useMemo(() => bars.filter((bar) => selected.has(bar.id) && !bar.readOnly), [bars, selected])
-  const selectedCount = selectedBars.length
+  const selectedBarIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const key of selected) {
+      const parsed = parseCell(key)
+      if (parsed) ids.add(parsed.barId)
+    }
+    return ids
+  }, [selected])
+
+  const selectedBars = useMemo(
+    () => bars.filter((bar) => selectedBarIds.has(bar.id) && !bar.readOnly),
+    [bars, selectedBarIds],
+  )
+  const selectedCount = selected.size
+  const selectedScheduleCount = selectedBars.length
 
   const stopEdge = useCallback(() => {
     edgeDir.current = 0
@@ -293,6 +377,35 @@ export function ProdPage({ view }: { view: ProdView }) {
         if (current && current.start === next.start && current.end === next.end && current.rowId === nextRow) return prev
         return prev.map((bar) => (bar.id === drag.id ? { ...bar, rowId: nextRow, start: next.start, end: next.end } : bar))
       })
+      const current = barsRef.current.find((bar) => bar.id === drag.id)
+      if (!current || current.start !== next.start || current.end !== next.end) {
+        setSelected((prev) => {
+          const mapped = new Set<string>()
+          if (drag.mode === 'move') {
+            const delta = diffDays(drag.snapshot.start, next.start)
+            for (const key of prev) {
+              const parsed = parseCell(key)
+              if (!parsed || parsed.barId !== drag.id) mapped.add(key)
+            }
+            for (const key of dragCellsRef.current) {
+              const parsed = parseCell(key)
+              if (!parsed) continue
+              mapped.add(cellId(parsed.barId, addDays(parsed.iso, delta)))
+            }
+          } else {
+            for (const key of prev) {
+              const parsed = parseCell(key)
+              if (!parsed) continue
+              if (parsed.barId !== drag.id) {
+                mapped.add(key)
+                continue
+              }
+              if (utc(parsed.iso) >= utc(next.start) && utc(parsed.iso) <= utc(next.end)) mapped.add(key)
+            }
+          }
+          return mapped
+        })
+      }
       const label = liveRangeLabel(next.start, next.end)
       setDragHint((prev) =>
         prev && prev.x === clientX && prev.y === clientY && prev.label === label ? prev : { x: clientX, y: clientY, label },
@@ -323,12 +436,12 @@ export function ProdPage({ view }: { view: ProdView }) {
           title: "Can't move schedule here",
           message: 'You can only move a schedule within the same task or group.',
         })
+        return
       }
     }
     window.setTimeout(() => {
       toast.success({
-        title: 'Schedule updated',
-        message: 'Drop saved. Undo restores the previous dates.',
+        title: drag.mode === 'move' ? 'Schedule moved' : 'Schedule updated',
         actions: {
           primary: {
             label: 'Undo',
@@ -398,6 +511,7 @@ export function ProdPage({ view }: { view: ProdView }) {
     event.preventDefault()
     event.stopPropagation()
     undoRef.current = barsRef.current.map((b) => ({ ...b }))
+    dragCellsRef.current = [...selected].filter((key) => parseCell(key)?.barId === bar.id)
     dragRef.current = {
       mode,
       id: bar.id,
@@ -412,31 +526,47 @@ export function ProdPage({ view }: { view: ProdView }) {
     }
   }
 
-  function onBarClick(id: string, mods: ClickMods = {}) {
+  function onBarClick(id: string, iso: string, mods: ClickMods = {}) {
     if (ignoreClick.current) {
       ignoreClick.current = false
       return
     }
+    const bar = barsRef.current.find((item) => item.id === id)
+    if (!bar || bar.readOnly) return
+    const clicked = cellId(id, clampIso(iso, bar.start, bar.end))
     const additive = Boolean(mods.metaKey || mods.ctrlKey)
     const range = Boolean(mods.shiftKey)
+    const whole = Boolean(mods.wholeBar)
+    const barCells = barDays(bar).map((day) => cellId(bar.id, day))
     setSelected((prev) => {
       if (range && selectAnchor.current) {
-        const a = orderedIds.indexOf(selectAnchor.current)
-        const b = orderedIds.indexOf(id)
+        const a = orderedCells.indexOf(selectAnchor.current)
+        const b = orderedCells.indexOf(clicked)
         if (a >= 0 && b >= 0) {
           const [lo, hi] = a < b ? [a, b] : [b, a]
-          return new Set(orderedIds.slice(lo, hi + 1))
+          return new Set(orderedCells.slice(lo, hi + 1))
         }
       }
+      if (whole) {
+        selectAnchor.current = clicked
+        if (additive) {
+          const next = new Set(prev)
+          const allOn = barCells.every((cell) => next.has(cell))
+          if (allOn) for (const cell of barCells) next.delete(cell)
+          else for (const cell of barCells) next.add(cell)
+          return next
+        }
+        return new Set(barCells)
+      }
       if (additive) {
-        selectAnchor.current = id
+        selectAnchor.current = clicked
         const next = new Set(prev)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
+        if (next.has(clicked)) next.delete(clicked)
+        else next.add(clicked)
         return next
       }
-      selectAnchor.current = id
-      return new Set([id])
+      selectAnchor.current = clicked
+      return new Set([clicked])
     })
   }
 
@@ -444,6 +574,7 @@ export function ProdPage({ view }: { view: ProdView }) {
     setSelected(new Set())
     selectAnchor.current = null
     setEditOpen(false)
+    setDupOpen(false)
     setConfirmDelete(false)
   }
 
@@ -458,14 +589,14 @@ export function ProdPage({ view }: { view: ProdView }) {
     const startT = first.startTime ?? WORKDAY.start
     const endT = first.endTime ?? WORKDAY.end
     setFullWorkday(startT === WORKDAY.start && endT === WORKDAY.end)
+    setEditTab(0)
+    setShiftDays(0)
+    setDupOpen(false)
     setEditOpen(true)
   }
 
-  function saveEdit() {
-    if (!selectedBars.length) return
-    if (utc(editStart) > utc(editEnd)) return
-    const ids = new Set(selectedBars.map((bar) => bar.id))
-    const before = bars.map((b) => ({ ...b }))
+  function applyChangeTime(ids: Set<string>) {
+    if (utc(editStart) > utc(editEnd)) return false
     setBars((prev) =>
       prev.map((bar) =>
         ids.has(bar.id)
@@ -480,10 +611,44 @@ export function ProdPage({ view }: { view: ProdView }) {
           : bar,
       ),
     )
+    return true
+  }
+
+  function saveEdit() {
+    if (!selectedBars.length) return
+    const ids = new Set(selectedBars.map((bar) => bar.id))
+    const before = bars.map((b) => ({ ...b }))
+    if (editTab === 1) {
+      const n = shiftDays ?? 0
+      if (n) {
+        setBars((prev) =>
+          prev.map((bar) =>
+            ids.has(bar.id) ? { ...bar, start: addDays(bar.start, n), end: addDays(bar.end, n) } : bar,
+          ),
+        )
+        setSelected((prev) => {
+          const mapped = new Set<string>()
+          for (const key of prev) {
+            const parsed = parseCell(key)
+            if (!parsed) continue
+            if (!ids.has(parsed.barId)) mapped.add(key)
+            else mapped.add(cellId(parsed.barId, addDays(parsed.iso, n)))
+          }
+          return mapped
+        })
+      } else if (!applyChangeTime(ids)) {
+        return
+      } else {
+        setSelected((prev) => keepCellsInRange(prev, ids, editStart, editEnd))
+      }
+    } else if (!applyChangeTime(ids)) {
+      return
+    } else {
+      setSelected((prev) => keepCellsInRange(prev, ids, editStart, editEnd))
+    }
     setEditOpen(false)
     toast.success({
       title: 'Schedule updated',
-      message: 'Dates saved from the panel.',
       actions: {
         primary: {
           label: 'Undo',
@@ -493,48 +658,61 @@ export function ProdPage({ view }: { view: ProdView }) {
     })
   }
 
-  function duplicateSelected() {
+  function openDuplicate() {
+    const first = selectedBars[0]
+    if (!first) return
+    setDupStart(first.start)
+    setDupEnd(first.end)
+    setEditOpen(false)
+    setDupOpen(true)
+  }
+
+  function confirmDuplicate() {
     if (!selectedBars.length) return
+    if (utc(dupStart) > utc(dupEnd)) return
     const clones = selectedBars.map((bar) => ({
       ...bar,
       id: nextBarId(),
+      start: dupStart,
+      end: dupEnd,
       color: isSchedule ? groupColorForRow(bar.rowId) : bar.color,
     }))
     setBars((prev) => [...prev, ...clones])
+    setDupOpen(false)
     toast.success({ title: 'Schedule duplicated' })
   }
 
   function selectRange() {
     if (!selectedBars.length) return
-    let min = selectedBars[0]!.start
-    let max = selectedBars[0]!.end
-    for (const bar of selectedBars) {
-      if (utc(bar.start) < utc(min)) min = bar.start
-      if (utc(bar.end) > utc(max)) max = bar.end
-    }
     const next = new Set<string>()
-    for (const bar of bars) {
-      if (bar.readOnly) continue
-      if (utc(bar.end) < utc(min) || utc(bar.start) > utc(max)) continue
-      next.add(bar.id)
+    for (const bar of selectedBars) {
+      for (const iso of barDays(bar)) next.add(cellId(bar.id, iso))
     }
     setSelected(next)
   }
 
   function confirmRemove() {
-    const ids = new Set(selectedBars.map((bar) => bar.id))
-    const before = bars.map((b) => ({ ...b }))
-    setBars((prev) => prev.filter((bar) => !ids.has(bar.id)))
-    clearSelection()
-    toast.success({
-      title: 'Schedule deleted',
-      actions: {
-        primary: {
-          label: 'Undo',
-          onClick: () => setBars(before),
-        },
-      },
+    const daysByBar = new Map<string, Set<string>>()
+    for (const key of selected) {
+      const parsed = parseCell(key)
+      if (!parsed) continue
+      let days = daysByBar.get(parsed.barId)
+      if (!days) {
+        days = new Set()
+        daysByBar.set(parsed.barId, days)
+      }
+      days.add(parsed.iso)
+    }
+    setBars((prev) => {
+      const next: ProdBar[] = []
+      for (const bar of prev) {
+        const days = daysByBar.get(bar.id)
+        if (!days) next.push(bar)
+        else next.push(...removeDaysFromBar(bar, days))
+      }
+      return next
     })
+    clearSelection()
   }
 
   const allFirstCollapsed = FIRST_LEVEL_IDS.length > 0 && FIRST_LEVEL_IDS.every((id) => collapsed.has(id))
@@ -543,12 +721,13 @@ export function ProdPage({ view }: { view: ProdView }) {
   useEffect(() => {
     if (selectedCount === 0) {
       setEditOpen(false)
+      setDupOpen(false)
       setConfirmDelete(false)
     }
   }, [selectedCount])
 
   return (
-    <div className={`prod-page${isSchedule ? ' is-schedule' : ' is-calendar'}${editOpen ? ' has-panel' : ''}`}>
+    <div className={`prod-page${isSchedule ? ' is-schedule' : ' is-calendar'}${editOpen || dupOpen ? ' has-panel' : ''}`}>
       <div className="prod-chrome">
         {isSchedule ? (
           <>
@@ -660,6 +839,7 @@ export function ProdPage({ view }: { view: ProdView }) {
                   bars={bars.filter((b) => b.rowId === row.id)}
                   selected={selected}
                   draggingId={draggingId}
+                  dateAtClientX={dateAtClientX}
                   onClear={clearSelection}
                   onBarClick={onBarClick}
                   onDragStart={startDrag}
@@ -670,7 +850,7 @@ export function ProdPage({ view }: { view: ProdView }) {
           {selectedCount > 0 ? (
             <div className="prod-action">
               <span className="prod-action-count">
-                <strong>{selectedCount}</strong> selected
+                <strong>{selectedCount}</strong> items selected
               </span>
               <Button size="small" appearance="ghost" onClick={clearSelection}>
                 Clear Selection
@@ -678,28 +858,28 @@ export function ProdPage({ view }: { view: ProdView }) {
               <Button size="small" appearance="secondary" icon={RangeIcon} onClick={selectRange}>
                 Select Range
               </Button>
-              <Button size="small" appearance="secondary" icon={DuplicateIcon} onClick={duplicateSelected}>
+              <Button size="small" appearance="secondary" icon={DuplicateIcon} onClick={openDuplicate}>
                 Duplicate
               </Button>
               <Button size="small" appearance="secondary" icon={DeleteIcon} onClick={() => setConfirmDelete(true)}>
                 Delete
               </Button>
               <Button size="small" appearance="primary" icon={EditIcon} onClick={openEdit}>
-                {selectedCount > 1 ? 'Bulk Edit' : 'Edit'}
+                {selectedScheduleCount > 1 ? 'Bulk Edit' : 'Edit'}
               </Button>
             </div>
           ) : null}
         </div>
         {editOpen ? (
-          <aside className="prod-edit" aria-label={selectedCount > 1 ? 'Bulk Edit' : 'Edit schedule'}>
+          <aside className="prod-edit" aria-label={selectedScheduleCount > 1 ? 'Bulk Edit' : 'Edit schedule'}>
             <div className="prod-edit-head">
-              <Text size="large">{selectedCount > 1 ? 'Bulk Edit' : 'Edit schedule'}</Text>
+              <Text size="large">{selectedScheduleCount > 1 ? 'Bulk Edit' : 'Edit schedule'}</Text>
               <Button size="small" appearance="ghost" onClick={() => setEditOpen(false)}>
                 Close
               </Button>
             </div>
             <div className="prod-edit-body">
-              <Tab defaultIndex={0}>
+              <Tab index={editTab} onIndexChange={setEditTab}>
                 <Tab.List>
                   <Tab.Button id="prod-tab-time" controls="prod-panel-time">
                     Change Time
@@ -751,8 +931,12 @@ export function ProdPage({ view }: { view: ProdView }) {
                 </Tab.Panel>
                 <Tab.Panel id="prod-panel-shift">
                   <div className="prod-edit-fields">
-                    <DateFieldSingle label="Start date" value={editStart} onChange={(c) => c.date && c.isDateValid && setEditStart(c.date)} />
-                    <DateFieldSingle label="End date" value={editEnd} onChange={(c) => c.date && c.isDateValid && setEditEnd(c.date)} />
+                    <NumberField
+                      label="Shift by N days"
+                      value={shiftDays}
+                      onChange={setShiftDays}
+                      step={1}
+                    />
                   </div>
                 </Tab.Panel>
               </Tab>
@@ -766,15 +950,34 @@ export function ProdPage({ view }: { view: ProdView }) {
               </Button>
             </div>
           </aside>
-        ) : isSchedule ? (
-          <aside className="prod-side">Project Details</aside>
+        ) : dupOpen ? (
+          <aside className="prod-edit" aria-label="Duplicate">
+            <div className="prod-edit-head">
+              <Text size="large">Duplicate</Text>
+              <Button size="small" appearance="ghost" onClick={() => setDupOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="prod-edit-body">
+              <div className="prod-edit-fields">
+                <DateFieldSingle label="Start date" value={dupStart} onChange={(c) => c.date && c.isDateValid && setDupStart(c.date)} />
+                <DateFieldSingle label="End date" value={dupEnd} onChange={(c) => c.date && c.isDateValid && setDupEnd(c.date)} />
+              </div>
+            </div>
+            <div className="prod-edit-foot">
+              <Button appearance="secondary" onClick={() => setDupOpen(false)}>
+                Cancel
+              </Button>
+              <Button appearance="primary" onClick={confirmDuplicate}>
+                Duplicate
+              </Button>
+            </div>
+          </aside>
         ) : null}
       </div>
       {!isSchedule ? (
         <div className="prod-tray">
           <span>Schedule Resources</span>
-          <span className="prod-tray-pill" />
-          <span className="prod-tray-end">↗ ⌃</span>
         </div>
       ) : null}
 
@@ -785,15 +988,16 @@ export function ProdPage({ view }: { view: ProdView }) {
       ) : null}
 
       <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>
-        <Dialog.Header>Delete schedule?</Dialog.Header>
+        <Dialog.Header>Delete selection?</Dialog.Header>
         <Dialog.Content>
           <Text>
-            Remove {selectedCount} selected schedule{selectedCount === 1 ? '' : 's'}? This can be undone.
+            This will permanently delete {selectedCount} block{selectedCount === 1 ? '' : 's'} across{' '}
+            {selectedScheduleCount} schedule{selectedScheduleCount === 1 ? '' : 's'}. This cannot be undone.
           </Text>
         </Dialog.Content>
         <Dialog.Footer>
           <Dialog.CancelButton>Cancel</Dialog.CancelButton>
-          <Button appearance="primary" onClick={confirmRemove}>
+          <Button appearance="danger" onClick={confirmRemove}>
             Delete
           </Button>
         </Dialog.Footer>
@@ -934,6 +1138,7 @@ function DataRow({
   bars,
   selected,
   draggingId,
+  dateAtClientX,
   onClear,
   onBarClick,
   onDragStart,
@@ -951,8 +1156,9 @@ function DataRow({
   bars: ProdBar[]
   selected: Set<string>
   draggingId: string | null
+  dateAtClientX: (clientX: number) => string
   onClear: () => void
-  onBarClick: (id: string, mods?: ClickMods) => void
+  onBarClick: (id: string, iso: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
 }) {
   const level = isSchedule ? rowLevel(row) : 0
@@ -1037,8 +1243,9 @@ function DataRow({
             colCount={columns.length}
             showWeekends={showWeekends}
             scrollLeft={scrollLeft}
-            selected={selected.has(bar.id)}
+            selected={selected}
             dragging={draggingId === bar.id}
+            dateAtClientX={dateAtClientX}
             onBarClick={onBarClick}
             onDragStart={onDragStart}
           />
@@ -1057,6 +1264,7 @@ function BarView({
   scrollLeft,
   selected,
   dragging,
+  dateAtClientX,
   onBarClick,
   onDragStart,
 }: {
@@ -1066,13 +1274,17 @@ function BarView({
   colCount: number
   showWeekends: boolean
   scrollLeft: number
-  selected: boolean
+  selected: Set<string>
   dragging: boolean
-  onBarClick: (id: string, mods?: ClickMods) => void
+  dateAtClientX: (clientX: number) => string
+  onBarClick: (id: string, iso: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
 }) {
   const box = barBox(bar.start, bar.end, minIndex, colW, colCount)
   if (!box) return null
+  const days = barDays(bar)
+  const selectedDays = days.filter((iso) => selected.has(cellId(bar.id, iso)))
+  const allSelected = selectedDays.length > 0 && selectedDays.length === days.length
   const hatches = showWeekends ? weekendsIn(bar.start, bar.end) : []
   const leftPx = box.left + 2
   const widthPx = Math.max(8, box.width - 4)
@@ -1081,9 +1293,10 @@ function BarView({
   const shiftPx = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
   const ink = isDarkColor(bar.color) ? '#fff' : '#040404'
   const detail = bar.notes || bar.detail
+  const visEnd = box.visStart + Math.round(box.width / colW) - 1
   return (
     <div
-      className={`prod-bar${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
+      className={`prod-bar${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${allSelected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
       style={
         {
           left: leftPx,
@@ -1099,7 +1312,24 @@ function BarView({
       onClick={(event) => {
         event.stopPropagation()
         if (bar.readOnly) return
-        onBarClick(bar.id, { shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey })
+        const rect = event.currentTarget.getBoundingClientRect()
+        const wholeBar = event.detail >= 2 || event.clientY - rect.top <= 8
+        onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          wholeBar,
+        })
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation()
+        if (bar.readOnly) return
+        onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
+          shiftKey: event.shiftKey,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          wholeBar: true,
+        })
       }}
       onPointerDown={(event) => onDragStart(event, bar, 'move')}
     >
@@ -1111,9 +1341,22 @@ function BarView({
       ) : null}
       {hatches.map((iso) => {
         const idx = columnIndexAt('days', utc(iso))
-        if (idx < box.visStart || idx > box.visStart + Math.round(box.width / colW) - 1) return null
+        if (idx < box.visStart || idx > visEnd) return null
         return <span key={iso} className="prod-bar-hatch" style={{ left: (idx - box.visStart) * colW - 2, width: colW }} />
       })}
+      {!allSelected
+        ? selectedDays.map((iso) => {
+            const idx = columnIndexAt('days', utc(iso))
+            if (idx < box.visStart || idx > visEnd) return null
+            return (
+              <span
+                key={`sel-${iso}`}
+                className="prod-bar-cell is-on"
+                style={{ left: (idx - box.visStart) * colW - 2, width: colW }}
+              />
+            )
+          })
+        : null}
       {!bar.readOnly ? (
         <>
           <span
