@@ -4,18 +4,24 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
   Avatar,
   Button,
+  Calendar,
+  Checkbox,
   Chip,
   DateFieldSingle,
-  Drawer,
+  Dialog,
   Icon,
   Popover,
   Switch,
+  Tab,
   Text,
+  TextField,
+  TimeField,
   toast,
 } from '@servicetitan/anvil2'
 import {
@@ -24,26 +30,44 @@ import {
   diffDays,
   emptySpan,
   isoFromTs,
+  monthBands,
   utc,
   type Column,
   type Span,
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
-import { CalendarCheckIcon, CalendarIcon, CloseIcon, ExpandMoreIcon } from '../icons'
+import {
+  CalendarIcon,
+  ChevronRightIcon,
+  DeleteIcon,
+  DuplicateIcon,
+  EditIcon,
+  ExpandMoreIcon,
+  RangeIcon,
+  UnfoldLessIcon,
+  UnfoldMoreIcon,
+} from '../icons'
 import {
   BAR_RADIUS,
   calendarRows,
   EDGE_DELAY_MS,
   EDGE_ZONE,
+  firstLevelGroupIds,
+  groupColorForRow,
   initialCalendarBars,
   initialScheduleBars,
+  isDarkColor,
   PROD_TODAY,
   RC_GUTTER,
   RC_HEAD_H,
   ROW_H,
+  rowHasChildren,
+  rowHidden,
+  rowLevel,
   SCHEDULE_GUTTER,
   SCHEDULE_HEAD_H,
   scheduleRows,
+  stripColors,
   WORKDAY,
   type ProdBar,
   type ProdRow,
@@ -53,8 +77,24 @@ import './prod.css'
 
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const DAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const DAYS_ABBR = ['SU', 'M', 'T', 'W', 'TH', 'F', 'SA']
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTHS_LONG = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+]
 const SCROLL_PX = 8
+const FIRST_LEVEL_IDS = firstLevelGroupIds()
 
 function resizeStart(span: Span, next: string): Span {
   if (utc(next) > utc(span.end)) return { ...span, start: span.end }
@@ -107,6 +147,19 @@ function barBox(start: string, end: string, minIndex: number, colW: number, colC
   }
 }
 
+function timeLine(bar: ProdBar) {
+  return `${bar.startTime ?? WORKDAY.start} - ${bar.endTime ?? WORKDAY.end}`
+}
+
+function nextBarId() {
+  return `bar-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function toDayIso(value: string) {
+  const iso = value.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : ''
+}
+
 type DragMode = 'move' | 'resize-start' | 'resize-end'
 type DragState = {
   mode: DragMode
@@ -120,6 +173,7 @@ type DragState = {
   lastY: number
   moved: boolean
 }
+type ClickMods = { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }
 
 function rowAtPoint(clientY: number) {
   const nodes = document.querySelectorAll<HTMLElement>('[data-prod-row]')
@@ -140,21 +194,28 @@ export function ProdPage({ view }: { view: ProdView }) {
   const [bars, setBars] = useState<ProdBar[]>(() => (isSchedule ? initialScheduleBars : initialCalendarBars).map((b) => ({ ...b })))
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [showWeekends, setShowWeekends] = useState(true)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [editId, setEditId] = useState<string | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const [editStart, setEditStart] = useState(PROD_TODAY)
   const [editEnd, setEditEnd] = useState(PROD_TODAY)
+  const [editStartTime, setEditStartTime] = useState(WORKDAY.start)
+  const [editEndTime, setEditEndTime] = useState(WORKDAY.end)
+  const [editNotes, setEditNotes] = useState('')
+  const [fullWorkday, setFullWorkday] = useState(true)
   const [dragHint, setDragHint] = useState<{ x: number; y: number; label: string } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<DragState | null>(null)
   const undoRef = useRef<ProdBar[] | null>(null)
   const barsRef = useRef(bars)
   barsRef.current = bars
+  const ignoreClick = useRef(false)
+  const selectAnchor = useRef<string | null>(null)
   const edgeDir = useRef(0)
   const edgeSince = useRef(0)
   const timeline = useTimelineScroll('days', scrollRef, { gutter, initialIso: PROD_TODAY })
-  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible } = timeline
+  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible, scrollLeft } = timeline
   const dateAtClientXRef = useRef(dateAtClientX)
   dateAtClientXRef.current = dateAtClientX
   const scrollByRef = useRef(scrollBy)
@@ -164,19 +225,34 @@ export function ProdPage({ view }: { view: ProdView }) {
 
   useEffect(() => {
     setBars((isSchedule ? initialScheduleBars : initialCalendarBars).map((b) => ({ ...b })))
-    setSelected(null)
-    setEditId(null)
+    setSelected(new Set())
+    setEditOpen(false)
+    setConfirmDelete(false)
     setCollapsed(new Set())
     setDraggingId(null)
     setDragHint(null)
     dragRef.current = null
+    selectAnchor.current = null
     jumpTo(PROD_TODAY)
   }, [isSchedule, jumpTo])
 
   const visibleRows = useMemo(() => {
     if (!isSchedule) return rows
-    return rows.filter((row) => !row.parentId || !collapsed.has(row.parentId))
+    return rows.filter((row) => !rowHidden(row, collapsed))
   }, [rows, collapsed, isSchedule])
+
+  const orderedIds = useMemo(() => {
+    const ids: string[] = []
+    for (const row of visibleRows) {
+      for (const bar of bars) {
+        if (bar.rowId === row.id && !bar.readOnly) ids.push(bar.id)
+      }
+    }
+    return ids
+  }, [visibleRows, bars])
+
+  const selectedBars = useMemo(() => bars.filter((bar) => selected.has(bar.id) && !bar.readOnly), [bars, selected])
+  const selectedCount = selectedBars.length
 
   const stopEdge = useCallback(() => {
     edgeDir.current = 0
@@ -191,7 +267,9 @@ export function ProdPage({ view }: { view: ProdView }) {
       drag.lastY = clientY
       if (Math.abs(clientX - drag.originX) > 4 || Math.abs(clientY - drag.originY) > 4) {
         drag.moved = true
+        ignoreClick.current = true
         setDraggingId(drag.id)
+        document.body.classList.add('prod-grabbing')
       }
       if (!drag.moved) return
       const date = dateAtClientXRef.current(clientX)
@@ -233,15 +311,7 @@ export function ProdPage({ view }: { view: ProdView }) {
     document.body.classList.remove('prod-grabbing')
     if (!drag) return
     dragRef.current = null
-    if (!drag.moved) {
-      const current = barsRef.current.find((b) => b.id === drag.id)
-      if (current && !current.readOnly) {
-        setEditId(current.id)
-        setEditStart(current.start)
-        setEditEnd(current.end)
-      }
-      return
-    }
+    if (!drag.moved) return
     const before = undoRef.current
     undoRef.current = null
     if (drag.mode === 'move' && isSchedule) {
@@ -324,11 +394,10 @@ export function ProdPage({ view }: { view: ProdView }) {
   function startDrag(event: ReactPointerEvent, bar: ProdBar, mode: DragMode) {
     if (bar.readOnly) return
     if (event.button > 0) return
+    if (mode === 'move' && (event.shiftKey || event.ctrlKey || event.metaKey)) return
     event.preventDefault()
     event.stopPropagation()
-    setSelected(bar.id)
     undoRef.current = barsRef.current.map((b) => ({ ...b }))
-    document.body.classList.add('prod-grabbing')
     dragRef.current = {
       mode,
       id: bar.id,
@@ -343,17 +412,78 @@ export function ProdPage({ view }: { view: ProdView }) {
     }
   }
 
-  const editBar = bars.find((b) => b.id === editId)
+  function onBarClick(id: string, mods: ClickMods = {}) {
+    if (ignoreClick.current) {
+      ignoreClick.current = false
+      return
+    }
+    const additive = Boolean(mods.metaKey || mods.ctrlKey)
+    const range = Boolean(mods.shiftKey)
+    setSelected((prev) => {
+      if (range && selectAnchor.current) {
+        const a = orderedIds.indexOf(selectAnchor.current)
+        const b = orderedIds.indexOf(id)
+        if (a >= 0 && b >= 0) {
+          const [lo, hi] = a < b ? [a, b] : [b, a]
+          return new Set(orderedIds.slice(lo, hi + 1))
+        }
+      }
+      if (additive) {
+        selectAnchor.current = id
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      }
+      selectAnchor.current = id
+      return new Set([id])
+    })
+  }
 
-  const saveEdit = () => {
-    if (!editBar) return
+  function clearSelection() {
+    setSelected(new Set())
+    selectAnchor.current = null
+    setEditOpen(false)
+    setConfirmDelete(false)
+  }
+
+  function openEdit() {
+    const first = selectedBars[0]
+    if (!first) return
+    setEditStart(first.start)
+    setEditEnd(first.end)
+    setEditStartTime(first.startTime ?? WORKDAY.start)
+    setEditEndTime(first.endTime ?? WORKDAY.end)
+    setEditNotes(first.notes ?? '')
+    const startT = first.startTime ?? WORKDAY.start
+    const endT = first.endTime ?? WORKDAY.end
+    setFullWorkday(startT === WORKDAY.start && endT === WORKDAY.end)
+    setEditOpen(true)
+  }
+
+  function saveEdit() {
+    if (!selectedBars.length) return
     if (utc(editStart) > utc(editEnd)) return
+    const ids = new Set(selectedBars.map((bar) => bar.id))
     const before = bars.map((b) => ({ ...b }))
-    setBars((prev) => prev.map((b) => (b.id === editBar.id ? { ...b, start: editStart, end: editEnd } : b)))
-    setEditId(null)
+    setBars((prev) =>
+      prev.map((bar) =>
+        ids.has(bar.id)
+          ? {
+              ...bar,
+              start: editStart,
+              end: editEnd,
+              startTime: editStartTime,
+              endTime: editEndTime,
+              notes: editNotes,
+            }
+          : bar,
+      ),
+    )
+    setEditOpen(false)
     toast.success({
       title: 'Schedule updated',
-      message: 'Dates saved from the flyout.',
+      message: 'Dates saved from the panel.',
       actions: {
         primary: {
           label: 'Undo',
@@ -363,8 +493,62 @@ export function ProdPage({ view }: { view: ProdView }) {
     })
   }
 
+  function duplicateSelected() {
+    if (!selectedBars.length) return
+    const clones = selectedBars.map((bar) => ({
+      ...bar,
+      id: nextBarId(),
+      color: isSchedule ? groupColorForRow(bar.rowId) : bar.color,
+    }))
+    setBars((prev) => [...prev, ...clones])
+    toast.success({ title: 'Schedule duplicated' })
+  }
+
+  function selectRange() {
+    if (!selectedBars.length) return
+    let min = selectedBars[0]!.start
+    let max = selectedBars[0]!.end
+    for (const bar of selectedBars) {
+      if (utc(bar.start) < utc(min)) min = bar.start
+      if (utc(bar.end) > utc(max)) max = bar.end
+    }
+    const next = new Set<string>()
+    for (const bar of bars) {
+      if (bar.readOnly) continue
+      if (utc(bar.end) < utc(min) || utc(bar.start) > utc(max)) continue
+      next.add(bar.id)
+    }
+    setSelected(next)
+  }
+
+  function confirmRemove() {
+    const ids = new Set(selectedBars.map((bar) => bar.id))
+    const before = bars.map((b) => ({ ...b }))
+    setBars((prev) => prev.filter((bar) => !ids.has(bar.id)))
+    clearSelection()
+    toast.success({
+      title: 'Schedule deleted',
+      actions: {
+        primary: {
+          label: 'Undo',
+          onClick: () => setBars(before),
+        },
+      },
+    })
+  }
+
+  const allFirstCollapsed = FIRST_LEVEL_IDS.length > 0 && FIRST_LEVEL_IDS.every((id) => collapsed.has(id))
+  const collapseDisabled = FIRST_LEVEL_IDS.length === 0
+
+  useEffect(() => {
+    if (selectedCount === 0) {
+      setEditOpen(false)
+      setConfirmDelete(false)
+    }
+  }, [selectedCount])
+
   return (
-    <div className={`prod-page${isSchedule ? ' is-schedule' : ' is-calendar'}`}>
+    <div className={`prod-page${isSchedule ? ' is-schedule' : ' is-calendar'}${editOpen ? ' has-panel' : ''}`}>
       <div className="prod-chrome">
         {isSchedule ? (
           <>
@@ -395,14 +579,22 @@ export function ProdPage({ view }: { view: ProdView }) {
             <Button
               size="small"
               appearance="secondary"
-              icon={collapsed.size ? undefined : CloseIcon}
+              icon={allFirstCollapsed ? UnfoldMoreIcon : UnfoldLessIcon}
+              disabled={collapseDisabled}
               onClick={() =>
-                setCollapsed((prev) =>
-                  prev.size ? new Set() : new Set(scheduleRows.filter((r) => r.kind !== 'tech').map((r) => r.id)),
-                )
+                setCollapsed((prev) => {
+                  if (allFirstCollapsed) {
+                    const next = new Set(prev)
+                    for (const id of FIRST_LEVEL_IDS) next.delete(id)
+                    return next
+                  }
+                  const next = new Set(prev)
+                  for (const id of FIRST_LEVEL_IDS) next.add(id)
+                  return next
+                })
               }
             >
-              {collapsed.size ? 'Expand All' : 'Collapse All'}
+              {allFirstCollapsed ? 'Expand All' : 'Collapse All'}
             </Button>
           ) : null}
           <Button size="small" appearance="secondary" onClick={() => jumpTo(PROD_TODAY)}>
@@ -443,6 +635,7 @@ export function ProdPage({ view }: { view: ProdView }) {
                 colW={colW}
                 minIndex={minIndex}
                 showWeekends={showWeekends}
+                scrollLeft={scrollLeft}
               />
               {visibleRows.map((row) => (
                 <DataRow
@@ -454,6 +647,7 @@ export function ProdPage({ view }: { view: ProdView }) {
                   colW={colW}
                   minIndex={minIndex}
                   showWeekends={showWeekends}
+                  scrollLeft={scrollLeft}
                   collapsed={collapsed.has(row.id)}
                   onToggle={() =>
                     setCollapsed((prev) => {
@@ -466,14 +660,115 @@ export function ProdPage({ view }: { view: ProdView }) {
                   bars={bars.filter((b) => b.rowId === row.id)}
                   selected={selected}
                   draggingId={draggingId}
-                  onSelect={setSelected}
+                  onClear={clearSelection}
+                  onBarClick={onBarClick}
                   onDragStart={startDrag}
                 />
               ))}
             </div>
           </div>
+          {selectedCount > 0 ? (
+            <div className="prod-action">
+              <span className="prod-action-count">
+                <strong>{selectedCount}</strong> selected
+              </span>
+              <Button size="small" appearance="ghost" onClick={clearSelection}>
+                Clear Selection
+              </Button>
+              <Button size="small" appearance="secondary" icon={RangeIcon} onClick={selectRange}>
+                Select Range
+              </Button>
+              <Button size="small" appearance="secondary" icon={DuplicateIcon} onClick={duplicateSelected}>
+                Duplicate
+              </Button>
+              <Button size="small" appearance="secondary" icon={DeleteIcon} onClick={() => setConfirmDelete(true)}>
+                Delete
+              </Button>
+              <Button size="small" appearance="primary" icon={EditIcon} onClick={openEdit}>
+                {selectedCount > 1 ? 'Bulk Edit' : 'Edit'}
+              </Button>
+            </div>
+          ) : null}
         </div>
-        {isSchedule ? <aside className="prod-side">Project Details</aside> : null}
+        {editOpen ? (
+          <aside className="prod-edit" aria-label={selectedCount > 1 ? 'Bulk Edit' : 'Edit schedule'}>
+            <div className="prod-edit-head">
+              <Text size="large">{selectedCount > 1 ? 'Bulk Edit' : 'Edit schedule'}</Text>
+              <Button size="small" appearance="ghost" onClick={() => setEditOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="prod-edit-body">
+              <Tab defaultIndex={0}>
+                <Tab.List>
+                  <Tab.Button id="prod-tab-time" controls="prod-panel-time">
+                    Change Time
+                  </Tab.Button>
+                  <Tab.Button id="prod-tab-shift" controls="prod-panel-shift">
+                    Shift Dates
+                  </Tab.Button>
+                </Tab.List>
+                <Tab.Panel id="prod-panel-time">
+                  <div className="prod-edit-fields">
+                    <DateFieldSingle label="Start date" value={editStart} onChange={(c) => c.date && c.isDateValid && setEditStart(c.date)} />
+                    <DateFieldSingle label="End date" value={editEnd} onChange={(c) => c.date && c.isDateValid && setEditEnd(c.date)} />
+                    <TimeField
+                      label="Start time"
+                      format={12}
+                      value={editStartTime}
+                      onChange={(c) => {
+                        if (c.time && c.isInputValid) {
+                          setEditStartTime(c.time)
+                          setFullWorkday(c.time === WORKDAY.start && editEndTime === WORKDAY.end)
+                        }
+                      }}
+                    />
+                    <TimeField
+                      label="End time"
+                      format={12}
+                      value={editEndTime}
+                      onChange={(c) => {
+                        if (c.time && c.isInputValid) {
+                          setEditEndTime(c.time)
+                          setFullWorkday(editStartTime === WORKDAY.start && c.time === WORKDAY.end)
+                        }
+                      }}
+                    />
+                    <TextField label="Notes" value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
+                    <Checkbox
+                      label="Full workday"
+                      checked={fullWorkday}
+                      onChange={(_, state) => {
+                        const checked = Boolean(state?.checked)
+                        setFullWorkday(checked)
+                        if (checked) {
+                          setEditStartTime(WORKDAY.start)
+                          setEditEndTime(WORKDAY.end)
+                        }
+                      }}
+                    />
+                  </div>
+                </Tab.Panel>
+                <Tab.Panel id="prod-panel-shift">
+                  <div className="prod-edit-fields">
+                    <DateFieldSingle label="Start date" value={editStart} onChange={(c) => c.date && c.isDateValid && setEditStart(c.date)} />
+                    <DateFieldSingle label="End date" value={editEnd} onChange={(c) => c.date && c.isDateValid && setEditEnd(c.date)} />
+                  </div>
+                </Tab.Panel>
+              </Tab>
+            </div>
+            <div className="prod-edit-foot">
+              <Button appearance="secondary" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button appearance="primary" onClick={saveEdit}>
+                Save
+              </Button>
+            </div>
+          </aside>
+        ) : isSchedule ? (
+          <aside className="prod-side">Project Details</aside>
+        ) : null}
       </div>
       {!isSchedule ? (
         <div className="prod-tray">
@@ -489,41 +784,36 @@ export function ProdPage({ view }: { view: ProdView }) {
         </div>
       ) : null}
 
-      <Drawer open={Boolean(editBar)} onClose={() => setEditId(null)} size="small">
-        <Drawer.Header>Edit schedule</Drawer.Header>
-        <Drawer.Content>
-          <div className="prod-flyout-fields">
-            <Text>{editBar?.title}</Text>
-            {editBar?.detail ? (
-              <Text size="small" subdued>
-                {editBar.detail}
-              </Text>
-            ) : (
-              <Text size="small" subdued>
-                {WORKDAY.start} – {WORKDAY.end}
-              </Text>
-            )}
-            <DateFieldSingle label="Start date" value={editStart} onChange={(c) => c.date && c.isDateValid && setEditStart(c.date)} />
-            <DateFieldSingle label="End date" value={editEnd} onChange={(c) => c.date && c.isDateValid && setEditEnd(c.date)} />
-          </div>
-        </Drawer.Content>
-        <Drawer.Footer>
-          <Drawer.CancelButton>Cancel</Drawer.CancelButton>
-          <Button appearance="primary" onClick={saveEdit}>
-            Save
+      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>
+        <Dialog.Header>Delete schedule?</Dialog.Header>
+        <Dialog.Content>
+          <Text>
+            Remove {selectedCount} selected schedule{selectedCount === 1 ? '' : 's'}? This can be undone.
+          </Text>
+        </Dialog.Content>
+        <Dialog.Footer>
+          <Dialog.CancelButton>Cancel</Dialog.CancelButton>
+          <Button appearance="primary" onClick={confirmRemove}>
+            Delete
           </Button>
-        </Drawer.Footer>
-      </Drawer>
+        </Dialog.Footer>
+      </Dialog>
     </div>
   )
 }
 
 function DatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
+  const [open, setOpen] = useState(false)
   return (
-    <Popover placement="bottom-start">
+    <Popover open={open} onClose={() => setOpen(false)} placement="bottom-start" disableCaret>
       <Popover.Trigger>
         {(props) => (
-          <button type="button" className="prod-date-btn" {...props}>
+          <button
+            type="button"
+            className="prod-date-btn"
+            {...props}
+            onClick={() => setOpen((current) => !current)}
+          >
             <Icon svg={CalendarIcon} size="small" inherit />
             {pickerLabel(value)}
             <span className="prod-date-caret" aria-hidden>
@@ -533,7 +823,19 @@ function DatePicker({ value, onChange }: { value: string; onChange: (iso: string
         )}
       </Popover.Trigger>
       <Popover.Content>
-        <DateFieldSingle value={value} disableHint onChange={(c) => c.date && c.isDateValid && onChange(c.date)} />
+        <div className="prod-date-pop">
+          <Calendar
+            value={value}
+            defaultFocusedDate={value}
+            onSelection={({ value: next }) => {
+              if (typeof next !== 'string' || !next) return
+              const iso = toDayIso(next)
+              if (!iso) return
+              onChange(iso)
+              setOpen(false)
+            }}
+          />
+        </div>
       </Popover.Content>
     </Popover>
   )
@@ -547,6 +849,7 @@ function HeadRow({
   colW,
   minIndex,
   showWeekends,
+  scrollLeft,
 }: {
   isSchedule: boolean
   gutter: number
@@ -555,7 +858,9 @@ function HeadRow({
   colW: number
   minIndex: number
   showWeekends: boolean
+  scrollLeft: number
 }) {
+  const months = monthBands(columns)
   return (
     <div
       className="prod-head"
@@ -575,28 +880,38 @@ function HeadRow({
         )}
       </div>
       <div className="prod-days" style={{ width: columns.length * colW, height: headH }}>
+        {months.map((band) => {
+          const [yearStr, monthStr] = band.id.split('-')
+          const month = Number(monthStr)
+          const year = Number(yearStr)
+          const sameYear = year === new Date(utc(PROD_TODAY)).getUTCFullYear()
+          const left = (band.startIndex - minIndex) * colW
+          const width = band.span * colW
+          const clipped = left < scrollLeft - 1 && left + width > scrollLeft
+          const shiftPx = clipped ? Math.min(Math.max(0, scrollLeft - left), Math.max(0, width - 64)) : 0
+          return (
+            <div key={band.id} className="prod-month" style={{ left, width }}>
+              <span style={{ transform: `translateX(${shiftPx}px)` }}>
+                {MONTHS_LONG[month] ?? band.label}
+                {sameYear ? '' : ` ${year}`}
+              </span>
+            </div>
+          )
+        })}
         {columns.map((col) => {
           const isToday = col.id === PROD_TODAY
           const weekend = Boolean(col.weekend && showWeekends)
+          const day = new Date(col.start).getUTCDay()
           return (
             <div
               key={col.id}
-              className={`prod-day${weekend ? ' is-weekend' : ''}${isToday && isSchedule ? ' is-today' : ''}`}
+              className={`prod-day${weekend ? ' is-weekend' : ''}`}
               style={{ left: (col.index - minIndex) * colW, width: colW }}
             >
-              {isSchedule ? (
-                <div className="prod-day-label">
-                  <span className="prod-day-num">{col.label}</span>
-                  <span className="prod-day-wd">{col.sublabel.slice(0, 1)}</span>
-                </div>
-              ) : (
-                <div className="prod-rc-label">
-                  <b>{col.sublabel}</b>
-                  <span>
-                    {MONTHS_SHORT[new Date(col.start).getUTCMonth()]} {String(new Date(col.start).getUTCDate()).padStart(2, '0')}
-                  </span>
-                </div>
-              )}
+              <div className="prod-day-label">
+                <span className={`prod-day-num${isToday ? ' is-today' : ''}`}>{col.label}</span>
+                <span className="prod-day-wd">{DAYS_ABBR[day]}</span>
+              </div>
             </div>
           )
         })}
@@ -613,12 +928,14 @@ function DataRow({
   colW,
   minIndex,
   showWeekends,
+  scrollLeft,
   collapsed,
   onToggle,
   bars,
   selected,
   draggingId,
-  onSelect,
+  onClear,
+  onBarClick,
   onDragStart,
 }: {
   row: ProdRow
@@ -628,47 +945,68 @@ function DataRow({
   colW: number
   minIndex: number
   showWeekends: boolean
+  scrollLeft: number
   collapsed: boolean
   onToggle: () => void
   bars: ProdBar[]
-  selected: string | null
+  selected: Set<string>
   draggingId: string | null
-  onSelect: (id: string) => void
+  onClear: () => void
+  onBarClick: (id: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
 }) {
-  const nested = Boolean(row.parentId)
+  const level = isSchedule ? rowLevel(row) : 0
   const group = row.kind !== 'tech'
+  const topGroup = isSchedule && group && level === 0
+  const colors = isSchedule ? stripColors(row) : []
+  const canToggle = isSchedule && rowHasChildren(row.id)
   return (
     <div
-      className={`prod-row${group ? ' is-group' : ''}`}
+      className={`prod-row${group ? ' is-group' : ''}${topGroup ? ' is-top' : ''}`}
       data-prod-row={row.kind === 'tech' ? row.id : undefined}
       style={{
         gridTemplateColumns: `${gutter}px max-content`,
         height: ROW_H,
       }}
     >
-      <div className={`prod-gutter${group ? ' is-group' : ''}${nested ? ' is-nested' : ''}`} style={{ width: gutter, height: ROW_H }}>
+      <div
+        className={`prod-gutter${group ? ' is-group' : ''}${level > 0 ? ' is-nested' : ''}${topGroup ? ' is-top' : ''}`}
+        style={{
+          width: gutter,
+          height: ROW_H,
+          boxShadow: colors.length
+            ? [...colors]
+                .reverse()
+                .map((color, index, list) => `inset ${4 * (list.length - index)}px 0 0 ${color}`)
+                .join(', ')
+            : undefined,
+        }}
+      >
         {isSchedule && row.wbs != null ? <span className="prod-wbs">{row.wbs}</span> : null}
-        {row.kind === 'group' ? (
-          <button type="button" className={`prod-chevron${collapsed ? ' is-closed' : ''}`} onClick={onToggle} aria-label={collapsed ? 'Expand' : 'Collapse'}>
-            <Icon svg={ExpandMoreIcon} size="small" inherit />
-          </button>
-        ) : null}
-        {!isSchedule && row.initials ? <Avatar name={row.name} size="small" /> : null}
-        <div className="prod-person">
-          <span className="prod-name" title={row.name}>
-            {row.name}
-          </span>
-          {row.role ? <Chip size="small" label={row.role} /> : null}
+        <div className="prod-name-cell" style={{ paddingLeft: level * 20 }}>
+          {canToggle ? (
+            <button type="button" className="prod-chevron" onClick={onToggle} aria-label={collapsed ? 'Expand' : 'Collapse'}>
+              <Icon svg={collapsed ? ChevronRightIcon : ExpandMoreIcon} size="small" inherit />
+            </button>
+          ) : isSchedule ? (
+            <span className="prod-chevron-spacer" />
+          ) : null}
+          {!isSchedule && row.initials ? <Avatar name={row.name} size="small" /> : null}
+          <div className="prod-person">
+            <span className="prod-name" title={row.name}>
+              {row.name}
+            </span>
+            {row.role ? <Chip size="small" label={row.role} /> : null}
+          </div>
         </div>
-        {isSchedule && group ? (
-          <span className="prod-cal-btn" aria-hidden>
-            <Icon svg={CalendarCheckIcon} size="small" inherit />
-          </span>
+        {isSchedule ? (
+          <button type="button" className="prod-cal-btn" aria-label="Schedule technicians">
+            <Icon svg={CalendarIcon} size="small" inherit />
+          </button>
         ) : null}
       </div>
       <div
-        className="prod-days"
+        className={`prod-days${topGroup ? ' is-top' : ''}`}
         style={{ width: columns.length * colW, height: ROW_H }}
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest('.prod-handle, .prod-bar')) return
@@ -687,7 +1025,7 @@ function DataRow({
             key={col.id}
             className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}`}
             style={{ left: (col.index - minIndex) * colW, width: colW }}
-            onClick={() => onSelect('')}
+            onClick={onClear}
           />
         ))}
         {bars.map((bar) => (
@@ -698,9 +1036,10 @@ function DataRow({
             minIndex={minIndex}
             colCount={columns.length}
             showWeekends={showWeekends}
-            selected={selected === bar.id}
+            scrollLeft={scrollLeft}
+            selected={selected.has(bar.id)}
             dragging={draggingId === bar.id}
-            onSelect={onSelect}
+            onBarClick={onBarClick}
             onDragStart={onDragStart}
           />
         ))}
@@ -715,9 +1054,10 @@ function BarView({
   minIndex,
   colCount,
   showWeekends,
+  scrollLeft,
   selected,
   dragging,
-  onSelect,
+  onBarClick,
   onDragStart,
 }: {
   bar: ProdBar
@@ -725,49 +1065,54 @@ function BarView({
   minIndex: number
   colCount: number
   showWeekends: boolean
+  scrollLeft: number
   selected: boolean
   dragging: boolean
-  onSelect: (id: string) => void
+  onBarClick: (id: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
 }) {
   const box = barBox(bar.start, bar.end, minIndex, colW, colCount)
   if (!box) return null
   const hatches = showWeekends ? weekendsIn(bar.start, bar.end) : []
-  const dark = bar.color === '#1360d9'
+  const leftPx = box.left + 2
+  const widthPx = Math.max(8, box.width - 4)
+  const viewLeft = scrollLeft
+  const clipped = leftPx < viewLeft - 1 && leftPx + widthPx > viewLeft
+  const shiftPx = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
+  const ink = isDarkColor(bar.color) ? '#fff' : '#040404'
+  const detail = bar.notes || bar.detail
   return (
     <div
-      className={`prod-bar${bar.thin ? ' is-thin' : ''}${bar.detail ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
-      style={{
-        left: box.left + 2,
-        width: Math.max(8, box.width - 4),
-        background: bar.color,
-        borderRadius: BAR_RADIUS,
-        color: dark ? '#fff' : '#040404',
-      }}
+      className={`prod-bar${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
+      style={
+        {
+          left: leftPx,
+          width: widthPx,
+          background: bar.color,
+          borderRadius: BAR_RADIUS,
+          color: ink,
+          '--prod-label-shift': `${shiftPx}px`,
+        } as CSSProperties
+      }
       draggable={false}
       onDragStart={(event) => event.preventDefault()}
       onClick={(event) => {
         event.stopPropagation()
-        onSelect(bar.id)
+        if (bar.readOnly) return
+        onBarClick(bar.id, { shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey })
       }}
       onPointerDown={(event) => onDragStart(event, bar, 'move')}
     >
       {!bar.thin ? (
-        <>
-          <span className="prod-bar-title">{bar.title}</span>
-          {bar.detail ? <span className="prod-bar-detail">{bar.detail}</span> : null}
-        </>
+        <span className="prod-bar-label">
+          <span className="prod-bar-title">{timeLine(bar)}</span>
+          {detail ? <span className="prod-bar-detail">{detail}</span> : null}
+        </span>
       ) : null}
       {hatches.map((iso) => {
         const idx = columnIndexAt('days', utc(iso))
         if (idx < box.visStart || idx > box.visStart + Math.round(box.width / colW) - 1) return null
-        return (
-          <span
-            key={iso}
-            className="prod-bar-hatch"
-            style={{ left: (idx - box.visStart) * colW - 2, width: colW }}
-          />
-        )
+        return <span key={iso} className="prod-bar-hatch" style={{ left: (idx - box.visStart) * colW - 2, width: colW }} />
       })}
       {!bar.readOnly ? (
         <>
