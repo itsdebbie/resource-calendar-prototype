@@ -37,6 +37,24 @@ export const ExpandLessIcon: Svg = (props) => (
   </svg>
 )
 
+export const ChevronRightIcon: Svg = (props) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
+  </svg>
+)
+
+export const UnfoldLessIcon: Svg = (props) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M7.41 18.59 8.83 20 12 16.83 15.17 20l1.41-1.41L12 14l-4.59 4.59zM16.59 5.41 15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59z" />
+  </svg>
+)
+
+export const UnfoldMoreIcon: Svg = (props) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M12 5.83 15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z" />
+  </svg>
+)
+
 export const CalendarIcon: Svg = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
