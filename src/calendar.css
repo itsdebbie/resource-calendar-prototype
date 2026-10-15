@@ -1153,39 +1153,16 @@ body.rc-grabbing {
   pointer-events: none;
 }
 
-.rc-col.is-loading::after,
-.rc-cell.is-loading::after {
-  content: '';
-  position: absolute;
+.rc-week-skel {
+  position: absolute !important;
   inset: 6px 4px;
-  border-radius: 4px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--a2-foreground-color-subdued, #707070) 6%, transparent) 0%,
-    color-mix(in srgb, var(--a2-foreground-color-subdued, #707070) 12%, transparent) 50%,
-    color-mix(in srgb, var(--a2-foreground-color-subdued, #707070) 6%, transparent) 100%
-  );
-  background-size: 200% 100%;
-  animation: rc-skel 1.2s ease-in-out infinite;
+  width: auto !important;
+  height: auto !important;
+  --a2-inline-skeleton-height: auto;
   pointer-events: none;
   z-index: 1;
 }
 
-.rc-col.is-loading::after {
+.rc-week-skel.is-head {
   inset: 4px 3px;
-}
-
-@keyframes rc-skel {
-  0% {
-    background-position: 100% 0;
-    opacity: 0.55;
-  }
-  50% {
-    background-position: 0 0;
-    opacity: 1;
-  }
-  100% {
-    background-position: -100% 0;
-    opacity: 0.55;
-  }
 }

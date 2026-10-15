@@ -22,6 +22,7 @@ import {
   Popover,
   SearchField,
   SegmentedControl,
+  Skeleton,
   Switch,
   Text,
   TextField,
@@ -64,6 +65,7 @@ import {
   addDays,
   barPixelBox,
   calendarStartDay,
+  columnAtIndex,
   columnRenderBuffer,
   isoFromTs,
   MONTH_LABELS,
@@ -106,7 +108,13 @@ import {
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
 import { useWeekChunks } from './useWeekChunks'
-import { columnWeekLoading, fetchAssignmentWeek, ROW_ESTIMATE_PX, visibleRowWindowHeights } from './weekChunks'
+import {
+  columnWeekLoading,
+  fetchAssignmentWeek,
+  rangeReadyInWindow,
+  ROW_ESTIMATE_PX,
+  visibleRowWindowHeights,
+} from './weekChunks'
 import { BAR_FILL_UNASSIGNED, BAR_INK_UNASSIGNED, barTone } from './palette'
 import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
 import { CrewPanel } from './CrewPanel'
@@ -183,6 +191,7 @@ type GanttCtx = {
   weekGuideDay?: string
   assignmentCatalog: Assignment[]
   loadingWeeks: Set<string>
+  loadedWeeks: Iterable<string>
   resolve: (id: string, start: string, end: string, offDays?: string[]) => Span
   onBarClick: (id: string, mods?: ClickMods) => void
   onBarPointerDown: (event: ReactPointerEvent, id: string, span: Span, mode: DragMode, extraIds?: string[]) => void
@@ -308,7 +317,7 @@ export function ResourceCalendar() {
   const timeline = useTimelineScroll(zoom, scrollRef)
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
-  const firstVisibleIso = isoFromTs(viewWindow.start)
+  const firstVisibleIso = isoFromTs(columnAtIndex(zoom, timeline.firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
   const pickerText = pickerLabel(zoom, pickerStart)
 
@@ -395,12 +404,13 @@ export function ResourceCalendar() {
   const changeZoom = useCallback(
     (next: Zoom, iso?: string, offsetPx?: number) => {
       if (next === zoom) return
-      const date = iso ?? isoFromTs(viewWindow.start)
+      const date = iso ?? firstVisibleIso
       setAnchor(date, offsetPx ?? 0)
+      if (next !== 'days' && next !== 'weeks') setPinnedIso(null)
       setZoom(next)
       setSelected([])
     },
-    [zoom, viewWindow.start, setAnchor],
+    [zoom, firstVisibleIso, setAnchor],
   )
 
   useEffect(() => {
@@ -440,7 +450,7 @@ export function ResourceCalendar() {
       const minus = event.key === '-' || event.key === '_'
       if (!plus && !minus) return
       event.preventDefault()
-      changeZoom(zoomStep(zoom, plus ? -1 : 1), isoFromTs(viewWindow.start), 0)
+      changeZoom(zoomStep(zoom, plus ? -1 : 1), firstVisibleIso, 0)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -806,6 +816,7 @@ export function ResourceCalendar() {
     weekGuideDay: zoom === 'weeks' ? dragHint?.snapDay : undefined,
     assignmentCatalog: visibleAssignments,
     loadingWeeks: chunks.loadingSet,
+    loadedWeeks: chunks.loadedWeeks,
     resolve,
     onBarClick,
     onBarPointerDown,
@@ -1200,11 +1211,14 @@ function TimelineHeader({
         ) : null}
         {visColumns.map((col) => (
           <div
-            className={`rc-col${zoom === 'days' && col.weekend ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
+            className={`rc-col${zoom === 'days' && col.weekend ? ' is-weekend' : ''}`}
             data-col={col.id}
             key={col.id}
             style={{ ['--rc-i' as string]: col.index - minIndex }}
           >
+            {columnWeekLoading(col.start, col.end, loadingWeeks) ? (
+              <Skeleton.Rectangle className="rc-week-skel is-head" height="100%" aria-hidden aria-label="" />
+            ) : null}
             {zoom === 'days' ? (
               <>
                 <Text size="small" subdued className="rc-col-dow">
@@ -1283,13 +1297,28 @@ function RcGridRow({
   onToggle: (id: string) => void
   includeWeekends: boolean
 }) {
-  const { resolve, selectedKeys, viewWindow, zoom, assignmentCatalog } = useGantt()
+  const {
+    resolve,
+    selectedKeys,
+    viewWindow,
+    zoom,
+    assignmentCatalog,
+    loadedWeeks,
+    loadingWeeks,
+    conflictWindow,
+    dragIds,
+  } = useGantt()
+
+  const chunkReady = (id: string, start: string, end: string) =>
+    dragIds.has(id) || rangeReadyInWindow(start, end, loadedWeeks, loadingWeeks, conflictWindow)
 
   if (spec.kind === 'project') {
     const project = spec.project
     const projectOver = hoursOver(project.scheduledHours, project.budgetHours, project.actualHours)
-    const projectSpan = resolve(`proj-${project.id}`, project.start, project.end)
+    const projectId = `proj-${project.id}`
+    const projectSpan = resolve(projectId, project.start, project.end)
     const barHours = project.scheduledHours ? `${project.scheduledHours}h` : undefined
+    const showProjectBar = !project.leftover && chunkReady(projectId, project.start, project.end)
     return (
       <div className={`rc-row is-group${projectOver ? ' is-over' : ''}`}>
         <div className="rc-gutter">
@@ -1310,9 +1339,9 @@ function RcGridRow({
           )}
         </div>
         <Timeline>
-          {project.leftover ? null : (
+          {showProjectBar ? (
             <SpanBar
-              id={`proj-${project.id}`}
+              id={projectId}
               span={projectSpan}
               color={project.color}
               ink={project.ink}
@@ -1321,9 +1350,9 @@ function RcGridRow({
               scheduled={project.scheduledHours}
               budget={project.budgetHours}
               actual={project.actualHours}
-              selected={selectedKeys.has(`proj-${project.id}`)}
+              selected={selectedKeys.has(projectId)}
             />
-          )}
+          ) : null}
         </Timeline>
       </div>
     )
@@ -1344,18 +1373,20 @@ function RcGridRow({
           <BudgetNums budget={phase.budgetHours} scheduled={phase.scheduledHours} actual={phase.actualHours} />
         </div>
         <Timeline>
-          <SpanBar
-            id={phase.id}
-            span={span}
-            color={project.color}
-            ink={project.ink}
-            name={phase.name}
-            hours={hours}
-            scheduled={phase.scheduledHours}
-            budget={phase.budgetHours}
-            actual={phase.actualHours}
-            selected={selectedKeys.has(phase.id)}
-          />
+          {chunkReady(phase.id, phase.start, phase.end) ? (
+            <SpanBar
+              id={phase.id}
+              span={span}
+              color={project.color}
+              ink={project.ink}
+              name={phase.name}
+              hours={hours}
+              scheduled={phase.scheduledHours}
+              budget={phase.budgetHours}
+              actual={phase.actualHours}
+              selected={selectedKeys.has(phase.id)}
+            />
+          ) : null}
         </Timeline>
       </div>
     )
@@ -1784,10 +1815,14 @@ function Timeline({ children, packed, lanes = 1 }: { children?: ReactNode; packe
     <div className={`rc-timeline${packed ? ' is-packed' : ''}`} style={style}>
       {visColumns.map((col) => (
         <div
-          className={`rc-cell${zoom === 'days' && col.weekend ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
+          className={`rc-cell${zoom === 'days' && col.weekend ? ' is-weekend' : ''}`}
           key={col.id}
           style={{ ['--rc-i' as string]: col.index - minIndex }}
-        />
+        >
+          {columnWeekLoading(col.start, col.end, loadingWeeks) ? (
+            <Skeleton.Rectangle className="rc-week-skel" height="100%" aria-hidden aria-label="" />
+          ) : null}
+        </div>
       ))}
       {hatch && zoom !== 'days'
         ? visColumns.flatMap((col) =>
