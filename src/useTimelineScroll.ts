@@ -3,7 +3,10 @@ import type { Zoom } from './data'
 import {
   BUFFER_COLS,
   DEMO_TODAY,
-  EDGE_PX,
+  EDGE_SCROLL_GAIN,
+  EDGE_SCROLL_MAX_PX,
+  EDGE_SCROLL_MIN_PX,
+  EDGE_SCROLL_ZONE_PX,
   GUTTER,
   columnAtIndex,
   columnIndexAt,
@@ -163,17 +166,21 @@ export function useTimelineScroll(
     [scrollRef, expandToIndex, publishWindow, slideByCols],
   )
 
+  /** Edge auto-scroll while a bar is dragged or resized. Speed ramps toward the edge; no end cap. */
   const autoScrollFromPointer = useCallback(
     (clientX: number) => {
       const el = scrollRef.current
       if (!el) return 0
       const rect = el.getBoundingClientRect()
       const viewW = Math.min(el.clientWidth, window.innerWidth)
-      const left = rect.left + gutterRef.current + EDGE_PX
-      const right = rect.left + viewW - EDGE_PX
+      const left = rect.left + gutterRef.current + EDGE_SCROLL_ZONE_PX
+      const right = rect.left + viewW - EDGE_SCROLL_ZONE_PX
       let dx = 0
-      if (clientX > right) dx = Math.min(36, 12 + (clientX - right) / 3)
-      else if (clientX < left) dx = -Math.min(36, 12 + (left - clientX) / 3)
+      if (clientX > right) {
+        dx = Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (clientX - right) / EDGE_SCROLL_GAIN)
+      } else if (clientX < left) {
+        dx = -Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (left - clientX) / EDGE_SCROLL_GAIN)
+      }
       if (dx) scrollBy(dx)
       return dx
     },
