@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { Page, Text, Toaster } from '@servicetitan/anvil2'
 import { ResourceCalendar } from './ResourceCalendar'
 import { ProdPage } from './prod/ProdPage'
-import { PrototypeScrollSwitch, ScrollDemoProvider } from './scrollDemo'
 import './index.css'
 
 type Route = 'redesign' | 'schedule' | 'calendar'
@@ -24,7 +23,6 @@ function App() {
   }, [])
 
   return (
-    <ScrollDemoProvider>
     <div className="app-shell">
       <nav className="prod-nav" aria-label="Prototype pages">
         <a href="#/" className={route === 'redesign' ? 'is-active' : undefined}>
@@ -65,9 +63,7 @@ function App() {
         <ProdPage view={route === 'calendar' ? 'calendar' : 'schedule'} />
       )}
       </div>
-      <PrototypeScrollSwitch />
     </div>
-    </ScrollDemoProvider>
   )
 }
 

@@ -59,6 +59,7 @@ import {
 } from './data'
 import {
   CREW_PANEL_KEY,
+  DAY_MS,
   DEMO_TODAY,
   GUTTER,
   SHORT_BAR_PX,
@@ -93,7 +94,9 @@ import {
   todayMarkerX,
   mondayOf,
   weekIndexOf,
+  clipBarToGutter,
   weekendSlices,
+  weekendsVisible,
   worldXForDate,
   yearBands,
   zoomStep,
@@ -103,8 +106,8 @@ import {
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
-import { applyExtendOnDrop, barClipPath, growBoundToward, initialExtendBounds, useScrollDemo } from './scrollDemo'
-import { snapDragIso, type ExtendEdge } from './interaction'
+import { TimelineScrollbar } from './TimelineScrollbar'
+import { extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
 import {
   columnWeekLoading,
@@ -304,46 +307,46 @@ export function ResourceCalendar() {
   const [hoursBefore, setHoursBefore] = useState<Record<string, number> | null>(null)
   const zoomLock = useRef(0)
   const editable = isEditableZoom(zoom)
-  const { mode: scrollMode } = useScrollDemo()
   const seedBounds = useMemo(
     () => initialExtendBounds(DEMO_TODAY, [...assignments, ...projects, ...phases]),
     [],
   )
-  const [boundStart, setBoundStart] = useState(seedBounds.start)
-  const [boundEnd, setBoundEnd] = useState(seedBounds.end)
   const dropStartRef = useRef<string | null>(null)
   const dropEndRef = useRef<string | null>(null)
   const hitEdgeRef = useRef<ExtendEdge | null>(null)
-  useEffect(() => {
-    setBoundStart(seedBounds.start)
-    setBoundEnd(seedBounds.end)
-    hitEdgeRef.current = null
-  }, [scrollMode, seedBounds.start, seedBounds.end])
-  const onNeedBound = useCallback((edge: ExtendEdge, iso: string) => {
+  const onEdge = useCallback((edge: ExtendEdge) => {
     hitEdgeRef.current = edge
-    if (edge === 'end') setBoundEnd((prev) => growBoundToward(iso, prev, 'end'))
-    else setBoundStart((prev) => growBoundToward(iso, prev, 'start'))
   }, [])
 
   const timeline = useTimelineScroll(zoom, scrollRef, {
-    mode: scrollMode,
-    boundStartIso: boundStart,
-    boundEndIso: boundEnd,
-    onNeedBound,
+    seedStartIso: seedBounds.start,
+    seedEndIso: seedBounds.end,
+    onEdge,
   })
-  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx, extent } =
-    timeline
+  const {
+    columns,
+    colW,
+    viewWindow,
+    dateAtClientX,
+    jumpTo,
+    autoScrollFromPointer,
+    setAnchor,
+    scrollLeft,
+    viewportPx,
+    extent,
+    includeRange,
+  } = timeline
   const viewWindowRef = useRef(viewWindow)
   viewWindowRef.current = viewWindow
-  const boundStartRef = useRef(boundStart)
-  const boundEndRef = useRef(boundEnd)
-  boundStartRef.current = boundStart
-  boundEndRef.current = boundEnd
+  const extentRef = useRef(extent)
+  extentRef.current = extent
+  const includeRangeRef = useRef(includeRange)
+  includeRangeRef.current = includeRange
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, timeline.firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
-  const visibleRange = visibleColumnRange(zoom, timeline.firstVisible, viewportPx, colW, extent.max)
+  const visibleRange = visibleColumnRange(zoom, timeline.firstVisible, timeline.lastVisible)
   const pickerText = pickerLabel(zoom, visibleRange.start, visibleRange.end)
 
   function pickDate(iso: string) {
@@ -576,18 +579,19 @@ export function ResourceCalendar() {
       document.body.classList.remove('rc-grabbing')
       if (drag.moved) {
         ignoreClick.current = true
-        if (scrollMode === 'extend' && dropStartRef.current && dropEndRef.current) {
-          const next = applyExtendOnDrop(
+        if (dropStartRef.current && dropEndRef.current) {
+          const z = zoomRef.current
+          const ext = extentRef.current
+          const next = extendBoundsAfterDrop(
             dropStartRef.current,
             dropEndRef.current,
-            boundStartRef.current,
-            boundEndRef.current,
-            zoomRef.current,
+            isoFromTs(columnAtIndex(z, ext.min).start),
+            isoFromTs(columnAtIndex(z, ext.max).end - DAY_MS),
+            z,
             viewWindowRef.current,
             hitEdgeRef.current,
           )
-          setBoundStart(next.start)
-          setBoundEnd(next.end)
+          includeRangeRef.current(next.start, next.end)
         }
       }
       dropStartRef.current = null
@@ -600,7 +604,7 @@ export function ResourceCalendar() {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [applyDrag, scrollMode])
+  }, [applyDrag])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -980,6 +984,7 @@ export function ResourceCalendar() {
             </div>
           </Flex>
 
+          <div className="rc-gantt-pane">
           <div
             className={`rc-scroll${dragIds.size ? ' is-dragging' : ''}`}
             ref={scrollRef}
@@ -1046,6 +1051,8 @@ export function ResourceCalendar() {
               {rowWindow.padBottom > 0 ? <div className="rc-virt-pad" style={{ height: rowWindow.padBottom }} aria-hidden /> : null}
             </GanttContext.Provider>
             </div>
+          </div>
+          <TimelineScrollbar scrollRef={scrollRef} />
           </div>
               {groupBy === 'projects' ? (
                 <CrewPanel
@@ -1237,7 +1244,7 @@ function TimelineHeader({
   const bands = showMonthBand ? monthBands(visColumns) : yearBands(visColumns)
   const pinCol = visColumns.find((col) => col.index >= firstVisible) ?? visColumns[0]
   const pin = pinCol ? periodPinLabel(zoom, { start: pinCol.start, end: pinCol.end }) : ''
-  const hatch = zoom !== 'days' && showWeekends
+  const hatch = weekendsVisible(zoom, showWeekends) && zoom !== 'days'
 
   return (
     <div className="rc-head-timeline" style={{ ['--rc-cols' as string]: String(columns.length), ['--rc-col-w' as string]: `${colW}px` }}>
@@ -1770,7 +1777,7 @@ function ShortChip({
   lane: number
   conflict: boolean
 }) {
-  const { columns, editable, selectedKeys, dragIds, onBarClick, onBarPointerDown, onEditInWeek } = useGantt()
+  const { columns, colW, clipLeft, editable, selectedKeys, dragIds, onBarClick, onBarPointerDown, onEditInWeek } = useGantt()
   const project = projectById(rows[0]?.projectId ?? '')
   const color = project?.color ?? '#6a7a85'
   const ink = project?.ink ?? '#576671'
@@ -1783,10 +1790,13 @@ function ShortChip({
   const [popOpen, setPopOpen] = useState(false)
   const tip = useBarTip()
   if (!style.visible) return null
+  const box = barPixelBox(start, end, columns, colW)
+  const clipped = clipBarToGutter(box.leftPx, Math.max(124, box.widthPx), clipLeft)
+  if (!clipped) return null
 
   const wrapStyle = {
-    left: `calc(${style.left} + 3px)`,
-    width: `max(124px, calc(${style.width} - 6px))`,
+    left: clipped.left,
+    width: clipped.width,
     '--rc-lane': lane,
   } as CSSProperties
 
@@ -1881,7 +1891,7 @@ function Timeline({ children, packed, lanes = 1 }: { children?: ReactNode; packe
   const { columns, visColumns, colW, zoom, weekGuideDay, showWeekends, loadingWeeks } = useGantt()
   const minIndex = columns[0]?.index ?? 0
   const todayX = todayMarkerX(zoom, minIndex, colW)
-  const hatch = zoom === 'days' || showWeekends
+  const hatch = weekendsVisible(zoom, showWeekends)
   const style = {
     ['--rc-cols' as string]: String(columns.length),
     ['--rc-col-w' as string]: `${colW}px`,
@@ -2023,7 +2033,11 @@ function BarFrame({
   handles?: ReactNode
   innerRef?: { current: HTMLDivElement | null } | ((node: HTMLDivElement | null) => void)
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className'>) {
-  const { clipPath, left, width, ...restStyle } = style
+  const { left, width, overflowLeft, barWidth, ...restStyle } = style as CSSProperties & {
+    overflowLeft?: number
+    barWidth?: number
+  }
+  const shift = overflowLeft ?? 0
   return (
     <div
       className={`rc-bar-wrap${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
@@ -2034,7 +2048,7 @@ function BarFrame({
         {...rest}
         ref={innerRef as never}
         className={className}
-        style={{ ...restStyle, clipPath, width: '100%', left: 0 }}
+        style={{ ...restStyle, width: barWidth ?? '100%', left: shift ? -shift : 0 }}
       >
         {children}
       </div>
@@ -2104,8 +2118,9 @@ function BarSegment({
   const widthPx = Math.max(4, (Number.parseFloat(style.width) / 100) * timelineW - 6)
   const rightPx = leftPx + widthPx
   const viewLeft = clipLeft
-  const clipped = leftPx < viewLeft - 1 && rightPx > viewLeft
-  const shift = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
+  const clippedBox = clipBarToGutter(leftPx, widthPx, viewLeft)
+  if (!clippedBox) return null
+  const shift = clippedBox.overflowLeft
   const vis = Math.min(rightPx, viewLeft + viewPx) - Math.max(leftPx, viewLeft)
   const showHours = Boolean(showLabel && hours) && vis > 96 && !floatLabel && !colorOnly
   const dates = formatRange(seg.start, seg.end)
@@ -2115,12 +2130,13 @@ function BarSegment({
   const overflowRight = leftPx + widthPx + 96 > viewLeft + viewPx
   const barClass = `rc-bar${unassigned ? ' is-unassigned' : ''}${selectedNow ? ' is-selected' : ''}${sliver || colorOnly ? ' is-sliver' : ''}${colorOnly ? ' is-color-only' : ''}${dragging ? ' is-dragging' : ''}${editable ? '' : ' is-readonly'}${conflict ? ' is-conflict' : ''}${floatLabel ? ' is-short-float' : ''}`
   const barStyleVars = {
-    left: `calc(${style.left} + 3px)`,
-    width: `calc(${style.width} - 6px)`,
+    left: clippedBox.left,
+    width: clippedBox.width,
+    overflowLeft: clippedBox.overflowLeft,
+    barWidth: widthPx,
     ...barSurface(color, ink, unassigned),
     '--rc-lane': lane,
     '--rc-label-shift': `${shift}px`,
-    clipPath: barClipPath(leftPx, widthPx, viewLeft, viewPx),
   } as CSSProperties
 
   const inner = (

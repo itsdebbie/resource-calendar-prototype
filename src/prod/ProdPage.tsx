@@ -28,9 +28,11 @@ import {
 import type { GroupBy, Zoom } from '../data'
 import {
   addDays,
+  clipBarToGutter,
   columnAtIndex,
   columnIndexAt,
   columnRenderBuffer,
+  DAY_MS,
   diffDays,
   emptySpan,
   inTimeWindow,
@@ -41,6 +43,7 @@ import {
   visibleColumnRange,
   sliceVisibleColumns,
   utc,
+  weekendsVisible,
   worldXForDate,
   yearBands,
   zoomStep,
@@ -49,10 +52,10 @@ import {
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
+import { TimelineScrollbar } from '../TimelineScrollbar'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
-import { applyExtendOnDrop, barClipPath, growBoundToward, initialExtendBounds, useScrollDemo } from '../scrollDemo'
-import { snapDragIso, type ExtendEdge } from '../interaction'
+import { extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from '../interaction'
 import {
   CalendarIcon,
   ChevronRightIcon,
@@ -269,7 +272,7 @@ function ProdGrid({ view }: { view: ProdView }) {
   const dirtyIds = useRef(new Set<string>())
   const removedIds = useRef(new Set<string>())
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [showWeekends, setShowWeekends] = useState(true)
+  const [showWeekends, setShowWeekends] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -294,29 +297,18 @@ function ProdGrid({ view }: { view: ProdView }) {
   const ignoreClick = useRef(false)
   const selectAnchor = useRef<string | null>(null)
   const dragCellsRef = useRef<string[]>([])
-  const { mode: scrollMode } = useScrollDemo()
   const seedBars = isSchedule ? initialScheduleBars : initialCalendarBars
   const seedBounds = useMemo(() => initialExtendBounds(PROD_TODAY, seedBars), [seedBars])
-  const [boundStart, setBoundStart] = useState(seedBounds.start)
-  const [boundEnd, setBoundEnd] = useState(seedBounds.end)
   const hitEdgeRef = useRef<ExtendEdge | null>(null)
-  useEffect(() => {
-    setBoundStart(seedBounds.start)
-    setBoundEnd(seedBounds.end)
-    hitEdgeRef.current = null
-  }, [scrollMode, seedBounds.start, seedBounds.end])
-  const onNeedBound = useCallback((edge: ExtendEdge, iso: string) => {
+  const onEdge = useCallback((edge: ExtendEdge) => {
     hitEdgeRef.current = edge
-    if (edge === 'end') setBoundEnd((prev) => growBoundToward(iso, prev, 'end'))
-    else setBoundStart((prev) => growBoundToward(iso, prev, 'start'))
   }, [])
   const timeline = useTimelineScroll(zoom, scrollRef, {
     gutter,
     initialIso: PROD_TODAY,
-    mode: scrollMode,
-    boundStartIso: boundStart,
-    boundEndIso: boundEnd,
-    onNeedBound,
+    seedStartIso: seedBounds.start,
+    seedEndIso: seedBounds.end,
+    onEdge,
   })
   const {
     columns,
@@ -325,20 +317,21 @@ function ProdGrid({ view }: { view: ProdView }) {
     dateAtClientX,
     jumpTo,
     firstVisible,
+    lastVisible,
     scrollLeft,
     viewWindow,
     visibleCount,
-    viewportPx,
     extent,
     autoScrollFromPointer,
     setAnchor,
+    includeRange,
   } = timeline
   const viewWindowRef = useRef(viewWindow)
   viewWindowRef.current = viewWindow
-  const boundStartRef = useRef(boundStart)
-  const boundEndRef = useRef(boundEnd)
-  boundStartRef.current = boundStart
-  boundEndRef.current = boundEnd
+  const extentRef = useRef(extent)
+  extentRef.current = extent
+  const includeRangeRef = useRef(includeRange)
+  includeRangeRef.current = includeRange
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
   const visColumns = useMemo(
@@ -351,7 +344,7 @@ function ProdGrid({ view }: { view: ProdView }) {
   )
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
-  const visibleRange = visibleColumnRange(zoom, firstVisible, viewportPx, colW, extent.max)
+  const visibleRange = visibleColumnRange(zoom, firstVisible, lastVisible)
   const pickerText = pickerLabel(zoom, visibleRange.start, visibleRange.end)
   const changeZoom = useCallback(
     (next: Zoom, iso?: string, offsetPx?: number) => {
@@ -606,23 +599,22 @@ function ProdGrid({ view }: { view: ProdView }) {
     if (!drag) return
     dragRef.current = null
     if (!drag.moved) return
-    if (scrollMode === 'extend') {
-      const bar = barsRef.current.find((item) => item.id === drag.id)
-      if (bar) {
-        const next = applyExtendOnDrop(
-          bar.start,
-          bar.end,
-          boundStartRef.current,
-          boundEndRef.current,
-          zoomRef.current,
-          viewWindowRef.current,
-          hitEdgeRef.current,
-        )
-        setBoundStart(next.start)
-        setBoundEnd(next.end)
-      }
-      hitEdgeRef.current = null
+    const bar = barsRef.current.find((item) => item.id === drag.id)
+    if (bar) {
+      const z = zoomRef.current
+      const ext = extentRef.current
+      const next = extendBoundsAfterDrop(
+        bar.start,
+        bar.end,
+        isoFromTs(columnAtIndex(z, ext.min).start),
+        isoFromTs(columnAtIndex(z, ext.max).end - DAY_MS),
+        z,
+        viewWindowRef.current,
+        hitEdgeRef.current,
+      )
+      includeRangeRef.current(next.start, next.end)
     }
+    hitEdgeRef.current = null
     const before = undoRef.current
     undoRef.current = null
     if (drag.mode === 'move' && isSchedule) {
@@ -650,7 +642,7 @@ function ProdGrid({ view }: { view: ProdView }) {
         },
       })
     }, 0)
-  }, [isSchedule, scrollMode, setBarsUser])
+  }, [isSchedule, setBarsUser])
 
   useEffect(() => {
     const onMove = (event: PointerEvent | MouseEvent) => {
@@ -1060,6 +1052,7 @@ function ProdGrid({ view }: { view: ProdView }) {
               {rowSlice.padBottom > 0 ? <div className="prod-virt-pad" style={{ height: rowSlice.padBottom }} aria-hidden /> : null}
             </div>
           </div>
+          <TimelineScrollbar scrollRef={scrollRef} />
           {selectedCount > 0 ? (
             <div className="prod-action">
               <span className="prod-action-count">
@@ -1289,7 +1282,7 @@ function HeadRow({
         })}
         {columns.map((col) => {
           const isToday = today >= col.start && today < col.end
-          const weekend = Boolean(col.weekend && showWeekends)
+          const weekend = Boolean(col.weekend && weekendsVisible(zoom, showWeekends))
           const day = new Date(col.start).getUTCDay()
           const sub = zoom === 'days' ? DAYS_ABBR[day] : col.sublabel
           return (
@@ -1428,7 +1421,7 @@ function DataRow({
         {columns.map((col) => (
           <div
             key={col.id}
-            className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}`}
+            className={`prod-day${col.weekend && weekendsVisible(zoom, showWeekends) ? ' is-weekend' : ''}`}
             style={{ left: (col.index - minIndex) * colW, width: colW }}
             onClick={onClear}
           >
@@ -1491,19 +1484,20 @@ function BarView({
   const days = barDays(bar)
   const selectedDays = days.filter((iso) => selected.has(cellId(bar.id, iso)))
   const allSelected = selectedDays.length > 0 && selectedDays.length === days.length
-  const hatches = zoom === 'days' && showWeekends ? weekendsIn(bar.start, bar.end) : []
+  const hatches = weekendsVisible(zoom, showWeekends) ? weekendsIn(bar.start, bar.end) : []
   const leftPx = box.left + 2
   const widthPx = Math.max(8, box.width - 4)
   const viewLeft = scrollLeft
-  const clipped = leftPx < viewLeft - 1 && leftPx + widthPx > viewLeft
-  const shiftPx = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
+  const clippedBox = clipBarToGutter(leftPx, widthPx, viewLeft)
+  if (!clippedBox) return null
+  const shiftPx = clippedBox.overflowLeft
   const ink = isDarkColor(bar.color) ? '#fff' : '#040404'
   const detail = bar.notes || bar.detail
   const hatchW = zoom === 'days' ? colW : Math.max(4, colW / 7)
   return (
     <div
       className={`prod-bar-wrap${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${allSelected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
-      style={{ left: leftPx, width: widthPx }}
+      style={{ left: clippedBox.left, width: clippedBox.width }}
     >
       {allSelected ? <span className="prod-bar-select-ring" aria-hidden /> : null}
       <div
@@ -1513,8 +1507,9 @@ function BarView({
             background: bar.color,
             borderRadius: BAR_RADIUS,
             color: ink,
+            left: shiftPx ? -shiftPx : 0,
+            width: widthPx,
             '--prod-label-shift': `${shiftPx}px`,
-            clipPath: barClipPath(leftPx, widthPx, viewLeft, 1e9),
           } as CSSProperties
         }
         draggable={false}

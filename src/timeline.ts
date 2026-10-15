@@ -108,18 +108,16 @@ export function visibleFitCount(viewportPx: number, colW: number) {
 }
 
 /** Inclusive date range of the columns on screen, used for the toolbar picker label. */
-export function visibleColumnRange(
-  zoom: Zoom,
-  firstVisible: number,
-  viewportPx: number,
-  colW: number,
-  extentMax = firstVisible,
-) {
-  const fit = visibleFitCount(viewportPx, colW)
-  const lastIndex = Math.max(firstVisible, Math.min(firstVisible + fit - 1, extentMax))
+export function visibleColumnRange(zoom: Zoom, firstVisible: number, lastVisible: number) {
+  const lastIndex = Math.max(firstVisible, lastVisible)
   const first = columnAtIndex(zoom, firstVisible)
   const last = columnAtIndex(zoom, lastIndex)
   return { start: isoFromTs(first.start), end: isoFromTs(last.end - DAY_MS), count: lastIndex - firstVisible + 1 }
+}
+
+/** Weekend hatch and cell treatment: always in Day, or when Show Weekends is on. */
+export function weekendsVisible(zoom: Zoom, showWeekends: boolean) {
+  return zoom === 'days' || showWeekends
 }
 
 export function pickerLabel(zoom: Zoom, startIso: string, endIso?: string) {
@@ -606,6 +604,21 @@ export function barPixelBox(startIso: string, endIso: string, columns: Column[],
   const leftPx = (Number.parseFloat(style.left) / 100) * timelineW + 3
   const widthPx = Math.max(4, (Number.parseFloat(style.width) / 100) * timelineW - 6)
   return { ...style, leftPx, widthPx, rightPx: leftPx + widthPx }
+}
+
+/**
+ * Keep the bar wrap in the timeline pane (right of the sticky name gutter).
+ * Handles sit on the visible edges so left grab/drop matches the right.
+ */
+export function clipBarToGutter(leftPx: number, widthPx: number, viewLeft: number) {
+  const right = leftPx + widthPx
+  if (right <= viewLeft) return null
+  const overflowLeft = Math.max(0, viewLeft - leftPx)
+  return {
+    left: leftPx + overflowLeft,
+    width: Math.max(8, widthPx - overflowLeft),
+    overflowLeft,
+  }
 }
 
 /** Locked 15 Oct 2026: move and resize in every zoom. */

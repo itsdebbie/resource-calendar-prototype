@@ -13,6 +13,26 @@ import {
 
 export { DAY_VIEW_DAYS }
 
+export function spanBounds(items: { start: string; end: string }[]) {
+  if (items.length === 0) return null
+  let start = items[0]!.start
+  let end = items[0]!.end
+  for (const item of items) {
+    if (item.start < start) start = item.start
+    if (item.end > end) end = item.end
+  }
+  return { start, end }
+}
+
+/** Union of the opening visible range and the placeholder data span. */
+export function initialExtendBounds(todayIso: string, items: { start: string; end: string }[], visibleDays = DAY_VIEW_DAYS) {
+  const data = spanBounds(items)
+  const viewEnd = addDays(todayIso, visibleDays - 1)
+  const start = data && data.start < todayIso ? data.start : todayIso
+  const end = data && data.end > viewEnd ? data.end : viewEnd
+  return { start, end }
+}
+
 /**
  * Extend-on-drop buffers, same magnitude forward and back.
  * Month and Year values are assumptions (see INTERACTION-LOGIC.md).
@@ -60,6 +80,18 @@ export function addExtendBuffer(iso: string, zoom: Zoom, dir: 1 | -1) {
   if (spec.unit === 'weeks') return addDays(iso, dir * spec.cols * 7)
   if (spec.unit === 'months') return addCalendarMonths(iso, dir * spec.cols)
   return addCalendarMonths(iso, dir * spec.cols * 12)
+}
+
+/**
+ * Columns to keep past each visible edge while panning, and to grow by when the
+ * thumb/wheel nears an end. Quarter stores ~16 months as 6 quarter columns.
+ */
+export function padColumns(zoom: Zoom) {
+  if (zoom === 'days') return EXTEND_BUFFER.days.cols
+  if (zoom === 'weeks') return EXTEND_BUFFER.weeks.cols
+  if (zoom === 'months') return EXTEND_BUFFER.months.cols
+  if (zoom === 'quarters') return Math.ceil(EXTEND_BUFFER.quarters.cols / 3)
+  return EXTEND_BUFFER.year.cols
 }
 
 /** One column of the current zoom, used to grow bounds while auto-scrolling. */

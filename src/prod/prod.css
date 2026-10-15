@@ -194,7 +194,8 @@
 }
 
 .prod-scroll {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   flex: 1;
   min-width: 0;
   overscroll-behavior-x: contain;
@@ -325,6 +326,7 @@
 
 .prod-days {
   position: relative;
+  isolation: isolate;
 }
 
 .prod-month {
@@ -446,6 +448,7 @@
   top: 6px;
   height: 38px;
   z-index: 2;
+  overflow: hidden;
 }
 
 .prod-bar-wrap:not(.is-dragging) {
