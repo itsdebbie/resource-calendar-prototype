@@ -69,6 +69,7 @@ import {
   isoFromTs,
   pickerAnchorStart,
   pickerLabel,
+  visibleColumnRange,
   activeSegments,
   barStyle,
   diffDays,
@@ -330,7 +331,7 @@ export function ResourceCalendar() {
     boundEndIso: boundEnd,
     onNeedBound,
   })
-  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
+  const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx, extent } =
     timeline
   const viewWindowRef = useRef(viewWindow)
   viewWindowRef.current = viewWindow
@@ -342,7 +343,8 @@ export function ResourceCalendar() {
   zoomRef.current = zoom
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, timeline.firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
-  const pickerText = pickerLabel(zoom, pickerStart)
+  const visibleRange = visibleColumnRange(zoom, timeline.firstVisible, viewportPx, colW, extent.max)
+  const pickerText = pickerLabel(zoom, visibleRange.start, visibleRange.end)
 
   function pickDate(iso: string) {
     setPinnedIso(iso)
