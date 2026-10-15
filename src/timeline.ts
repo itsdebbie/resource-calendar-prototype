@@ -21,10 +21,17 @@ export const SHORT_BAR_PX = 60
 export const CREW_PANEL_KEY = 'rc-crew-panel-open'
 export const DAY_MS = 86400000
 export const BUFFER_COLS = 40
+/** Extra day/week/month columns rendered on each side of the viewport. */
+export const COLUMN_RENDER_BUFFER = 7
 export const EDGE_PX = 56
 export const ZOOM_ORDER: Zoom[] = ['days', 'weeks', 'months', 'quarters', 'year']
+/** 0 = Sunday. Later this can follow a company first-day-of-week setting. */
+export const WEEK_START_DAY = 0
+/** Invisible sizer for the toolbar picker; longest day-range label. */
+export const PICKER_LABEL_SIZER = 'Sep 30 – Oct 13, 2026'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+export const MONTH_LABELS = MONTHS
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -47,6 +54,57 @@ export function isoFromTs(ts: number) {
 
 export function addDays(iso: string, days: number) {
   return isoFromTs(utc(iso) + days * DAY_MS)
+}
+
+export function startOfWeek(iso: string, weekStartDay = WEEK_START_DAY) {
+  const day = new Date(utc(iso)).getUTCDay()
+  const delta = (day - weekStartDay + 7) % 7
+  return addDays(iso, -delta)
+}
+
+export function startOfMonth(iso: string) {
+  const d = new Date(utc(iso))
+  return isoFromTs(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))
+}
+
+export function startOfQuarter(iso: string) {
+  const d = new Date(utc(iso))
+  const month = Math.floor(d.getUTCMonth() / 3) * 3
+  return isoFromTs(Date.UTC(d.getUTCFullYear(), month, 1))
+}
+
+export function startOfYear(iso: string) {
+  const d = new Date(utc(iso))
+  return isoFromTs(Date.UTC(d.getUTCFullYear(), 0, 1))
+}
+
+export function pickerAnchorStart(zoom: Zoom, firstVisibleIso: string, pinnedIso: string | null) {
+  if (zoom === 'days' || zoom === 'weeks') {
+    if (pinnedIso && startOfWeek(pinnedIso) === startOfWeek(firstVisibleIso)) return pinnedIso
+    return startOfWeek(firstVisibleIso)
+  }
+  if (zoom === 'months') return startOfMonth(firstVisibleIso)
+  if (zoom === 'quarters') return startOfQuarter(firstVisibleIso)
+  return startOfYear(firstVisibleIso)
+}
+
+export function pickerLabel(zoom: Zoom, startIso: string) {
+  const d = new Date(utc(startIso))
+  if (zoom === 'days' || zoom === 'weeks') {
+    const end = addDays(startIso, 13)
+    const a = new Date(utc(startIso))
+    const b = new Date(utc(end))
+    const left = `${MONTHS[a.getUTCMonth()]} ${a.getUTCDate()}`
+    const right = `${MONTHS[b.getUTCMonth()]} ${b.getUTCDate()}`
+    return `${left} – ${right}, ${b.getUTCFullYear()}`
+  }
+  if (zoom === 'months') return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+  if (zoom === 'quarters') return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`
+  return String(d.getUTCFullYear())
+}
+
+export function calendarStartDay(): 'Sunday' | 'Monday' {
+  return WEEK_START_DAY === 0 ? 'Sunday' : 'Monday'
 }
 
 export function diffDays(a: string, b: string) {
@@ -186,6 +244,27 @@ export function columnsInExtent(zoom: Zoom, min: number, max: number): Column[] 
   const columns: Column[] = []
   for (let i = min; i <= max; i++) columns.push(columnAtIndex(zoom, i))
   return columns
+}
+
+/** Visible columns plus a buffer. Day zoom buffers one week of columns each side. */
+export function columnRenderBuffer(zoom: Zoom) {
+  if (zoom === 'days') return COLUMN_RENDER_BUFFER
+  if (zoom === 'weeks') return 1
+  return 1
+}
+
+export function sliceVisibleColumns(
+  columns: Column[],
+  firstVisible: number,
+  visibleCount: number,
+  bufferCols: number,
+) {
+  const minIndex = columns[0]?.index ?? firstVisible
+  const maxIndex = columns[columns.length - 1]?.index ?? firstVisible
+  const start = Math.max(minIndex, firstVisible - bufferCols)
+  const end = Math.min(maxIndex, firstVisible + visibleCount + bufferCols)
+  const slice = columns.filter((col) => col.index >= start && col.index <= end)
+  return slice.length > 0 ? slice : columns.slice(0, Math.min(columns.length, 24))
 }
 
 export function rangeOf(columns: Column[]) {
