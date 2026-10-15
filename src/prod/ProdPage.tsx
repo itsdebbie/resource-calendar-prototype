@@ -28,15 +28,20 @@ import {
 import {
   addDays,
   columnIndexAt,
+  columnRenderBuffer,
   diffDays,
   emptySpan,
+  inTimeWindow,
   isoFromTs,
   monthBands,
+  sliceVisibleColumns,
   utc,
   type Column,
   type Span,
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
+import { useWeekChunks } from '../useWeekChunks'
+import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
 import {
   CalendarIcon,
   ChevronRightIcon,
@@ -250,11 +255,17 @@ function rowAtPoint(clientY: number) {
 }
 
 export function ProdPage({ view }: { view: ProdView }) {
+  return <ProdGrid key={view} view={view} />
+}
+
+function ProdGrid({ view }: { view: ProdView }) {
   const isSchedule = view === 'schedule'
   const gutter = isSchedule ? SCHEDULE_GUTTER : RC_GUTTER
   const headH = isSchedule ? SCHEDULE_HEAD_H : RC_HEAD_H
   const rows = isSchedule ? scheduleRows : calendarRows
-  const [bars, setBars] = useState<ProdBar[]>(() => (isSchedule ? initialScheduleBars : initialCalendarBars).map((b) => ({ ...b })))
+  const [bars, setBars] = useState<ProdBar[]>([])
+  const dirtyIds = useRef(new Set<string>())
+  const removedIds = useRef(new Set<string>())
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [showWeekends, setShowWeekends] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -284,7 +295,65 @@ export function ProdPage({ view }: { view: ProdView }) {
   const edgeDir = useRef(0)
   const edgeSince = useRef(0)
   const timeline = useTimelineScroll('days', scrollRef, { gutter, initialIso: PROD_TODAY })
-  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible, scrollLeft } = timeline
+  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible, scrollLeft, viewWindow, visibleCount } =
+    timeline
+  const visColumns = useMemo(
+    () => sliceVisibleColumns(columns, firstVisible, visibleCount, columnRenderBuffer('days')),
+    [columns, firstVisible, visibleCount],
+  )
+  const headerCols = useMemo(
+    () => sliceVisibleColumns(columns, firstVisible, visibleCount, 31),
+    [columns, firstVisible, visibleCount],
+  )
+  const fetchWeek = useCallback(
+    (week: string) => fetchProdBarWeek(isSchedule ? initialScheduleBars : initialCalendarBars, week),
+    [isSchedule],
+  )
+  const chunks = useWeekChunks(viewWindow, fetchWeek, {
+    resetKey: view,
+  })
+  const setBarsUser = useCallback((action: ProdBar[] | ((prev: ProdBar[]) => ProdBar[])) => {
+    setBars((prev) => {
+      const next = typeof action === 'function' ? action(prev) : action
+      const nextIds = new Set(next.map((bar) => bar.id))
+      for (const bar of prev) {
+        if (!nextIds.has(bar.id)) removedIds.current.add(bar.id)
+      }
+      for (const bar of next) {
+        const old = prev.find((item) => item.id === bar.id)
+        if (
+          !old ||
+          old.start !== bar.start ||
+          old.end !== bar.end ||
+          old.rowId !== bar.rowId ||
+          old.notes !== bar.notes ||
+          old.startTime !== bar.startTime ||
+          old.endTime !== bar.endTime
+        ) {
+          dirtyIds.current.add(bar.id)
+        }
+      }
+      return next
+    })
+  }, [])
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportH, setViewportH] = useState(480)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const sync = () => {
+      setScrollTop(el.scrollTop)
+      setViewportH(el.clientHeight)
+    }
+    sync()
+    el.addEventListener('scroll', sync, { passive: true })
+    const ro = new ResizeObserver(sync)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', sync)
+      ro.disconnect()
+    }
+  }, [])
   const dateAtClientXRef = useRef(dateAtClientX)
   dateAtClientXRef.current = dateAtClientX
   const scrollByRef = useRef(scrollBy)
@@ -293,7 +362,9 @@ export function ProdPage({ view }: { view: ProdView }) {
   const firstIso = columns.find((c) => c.index === firstVisible)?.id ?? PROD_TODAY
 
   useEffect(() => {
-    setBars((isSchedule ? initialScheduleBars : initialCalendarBars).map((b) => ({ ...b })))
+    dirtyIds.current = new Set()
+    removedIds.current = new Set()
+    setBars([])
     setSelected(new Set())
     setEditOpen(false)
     setDupOpen(false)
@@ -306,10 +377,44 @@ export function ProdPage({ view }: { view: ProdView }) {
     jumpTo(PROD_TODAY)
   }, [isSchedule, jumpTo])
 
+  useEffect(() => {
+    const loaded = chunks.loadedWeeks
+    const fetched = chunks.items
+    const dirty = dirtyIds.current
+    const removed = removedIds.current
+    setBars((prev) => {
+      const map = new Map<string, ProdBar>()
+      for (const bar of prev) map.set(bar.id, bar)
+      for (const bar of fetched) {
+        if (removed.has(bar.id) || dirty.has(bar.id)) continue
+        if (!map.has(bar.id)) map.set(bar.id, bar)
+      }
+      for (const [id, bar] of [...map]) {
+        if (dirty.has(id)) continue
+        if (removed.has(id) || (loaded.length > 0 && !loaded.some((week) => overlapsWeek(bar.start, bar.end, week)))) {
+          map.delete(id)
+        }
+      }
+      const next = [...map.values()]
+      if (next.length === prev.length && next.every((bar, i) => bar === prev[i])) return prev
+      return next
+    })
+  }, [chunks.items, chunks.loadedWeeks])
+
   const visibleRows = useMemo(() => {
     if (!isSchedule) return rows
     return rows.filter((row) => !rowHidden(row, collapsed))
   }, [rows, collapsed, isSchedule])
+
+  const rowSlice = useMemo(
+    () => visibleRowWindow(visibleRows.length, Math.max(0, scrollTop - headH), Math.max(ROW_H, viewportH - headH), ROW_H),
+    [visibleRows.length, scrollTop, viewportH, headH],
+  )
+  const shownRows = visibleRows.slice(rowSlice.start, rowSlice.end + 1)
+  const visRange = {
+    start: visColumns[0]?.start ?? viewWindow.start,
+    end: visColumns[visColumns.length - 1]?.end ?? viewWindow.end,
+  }
 
   const orderedCells = useMemo(() => {
     const cells: string[] = []
@@ -372,7 +477,7 @@ export function ProdPage({ view }: { view: ProdView }) {
           if (hit && dst?.kind === 'tech' && src?.parentId && dst.parentId === src.parentId) nextRow = hit
         }
       }
-      setBars((prev) => {
+      setBarsUser((prev) => {
         const current = prev.find((bar) => bar.id === drag.id)
         if (current && current.start === next.start && current.end === next.end && current.rowId === nextRow) return prev
         return prev.map((bar) => (bar.id === drag.id ? { ...bar, rowId: nextRow, start: next.start, end: next.end } : bar))
@@ -411,7 +516,7 @@ export function ProdPage({ view }: { view: ProdView }) {
         prev && prev.x === clientX && prev.y === clientY && prev.label === label ? prev : { x: clientX, y: clientY, label },
       )
     },
-    [isSchedule],
+    [isSchedule, setBarsUser],
   )
   const applyDragRef = useRef(applyDrag)
   applyDragRef.current = applyDrag
@@ -446,7 +551,7 @@ export function ProdPage({ view }: { view: ProdView }) {
           primary: {
             label: 'Undo',
             onClick: () => {
-              if (before) setBars(before)
+              if (before) setBarsUser(before)
             },
           },
         },
@@ -597,7 +702,7 @@ export function ProdPage({ view }: { view: ProdView }) {
 
   function applyChangeTime(ids: Set<string>) {
     if (utc(editStart) > utc(editEnd)) return false
-    setBars((prev) =>
+    setBarsUser((prev) =>
       prev.map((bar) =>
         ids.has(bar.id)
           ? {
@@ -621,7 +726,7 @@ export function ProdPage({ view }: { view: ProdView }) {
     if (editTab === 1) {
       const n = shiftDays ?? 0
       if (n) {
-        setBars((prev) =>
+        setBarsUser((prev) =>
           prev.map((bar) =>
             ids.has(bar.id) ? { ...bar, start: addDays(bar.start, n), end: addDays(bar.end, n) } : bar,
           ),
@@ -652,7 +757,7 @@ export function ProdPage({ view }: { view: ProdView }) {
       actions: {
         primary: {
           label: 'Undo',
-          onClick: () => setBars(before),
+          onClick: () => setBarsUser(before),
         },
       },
     })
@@ -677,7 +782,7 @@ export function ProdPage({ view }: { view: ProdView }) {
       end: dupEnd,
       color: isSchedule ? groupColorForRow(bar.rowId) : bar.color,
     }))
-    setBars((prev) => [...prev, ...clones])
+    setBarsUser((prev) => [...prev, ...clones])
     setDupOpen(false)
     toast.success({ title: 'Schedule duplicated' })
   }
@@ -703,7 +808,7 @@ export function ProdPage({ view }: { view: ProdView }) {
       }
       days.add(parsed.iso)
     }
-    setBars((prev) => {
+    setBarsUser((prev) => {
       const next: ProdBar[] = []
       for (const bar of prev) {
         const days = daysByBar.get(bar.id)
@@ -810,21 +915,25 @@ export function ProdPage({ view }: { view: ProdView }) {
                 isSchedule={isSchedule}
                 gutter={gutter}
                 headH={headH}
-                columns={columns}
+                columns={headerCols}
                 colW={colW}
                 minIndex={minIndex}
                 showWeekends={showWeekends}
                 scrollLeft={scrollLeft}
+                loadingWeeks={chunks.loadingSet}
+                canvasCols={columns.length}
               />
-              {visibleRows.map((row) => (
+              {rowSlice.padTop > 0 ? <div className="prod-virt-pad" style={{ height: rowSlice.padTop }} aria-hidden /> : null}
+              {shownRows.map((row) => (
                 <DataRow
                   key={row.id}
                   row={row}
                   isSchedule={isSchedule}
                   gutter={gutter}
-                  columns={columns}
+                  columns={visColumns}
                   colW={colW}
                   minIndex={minIndex}
+                  canvasCols={columns.length}
                   showWeekends={showWeekends}
                   scrollLeft={scrollLeft}
                   collapsed={collapsed.has(row.id)}
@@ -836,15 +945,21 @@ export function ProdPage({ view }: { view: ProdView }) {
                       return next
                     })
                   }
-                  bars={bars.filter((b) => b.rowId === row.id)}
+                  bars={bars.filter(
+                    (b) =>
+                      b.rowId === row.id &&
+                      (b.id === draggingId || inTimeWindow(b.start, b.end, visRange)),
+                  )}
                   selected={selected}
                   draggingId={draggingId}
                   dateAtClientX={dateAtClientX}
                   onClear={clearSelection}
                   onBarClick={onBarClick}
                   onDragStart={startDrag}
+                  loadingWeeks={chunks.loadingSet}
                 />
               ))}
+              {rowSlice.padBottom > 0 ? <div className="prod-virt-pad" style={{ height: rowSlice.padBottom }} aria-hidden /> : null}
             </div>
           </div>
           {selectedCount > 0 ? (
@@ -1054,6 +1169,8 @@ function HeadRow({
   minIndex,
   showWeekends,
   scrollLeft,
+  loadingWeeks,
+  canvasCols,
 }: {
   isSchedule: boolean
   gutter: number
@@ -1063,6 +1180,8 @@ function HeadRow({
   minIndex: number
   showWeekends: boolean
   scrollLeft: number
+  loadingWeeks: Set<string>
+  canvasCols: number
 }) {
   const months = monthBands(columns)
   return (
@@ -1083,7 +1202,7 @@ function HeadRow({
           <span>Technicians</span>
         )}
       </div>
-      <div className="prod-days" style={{ width: columns.length * colW, height: headH }}>
+      <div className="prod-days" style={{ width: canvasCols * colW, height: headH }}>
         {months.map((band) => {
           const [yearStr, monthStr] = band.id.split('-')
           const month = Number(monthStr)
@@ -1109,7 +1228,7 @@ function HeadRow({
           return (
             <div
               key={col.id}
-              className={`prod-day${weekend ? ' is-weekend' : ''}`}
+              className={`prod-day${weekend ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
               style={{ left: (col.index - minIndex) * colW, width: colW }}
             >
               <div className="prod-day-label">
@@ -1131,6 +1250,7 @@ function DataRow({
   columns,
   colW,
   minIndex,
+  canvasCols,
   showWeekends,
   scrollLeft,
   collapsed,
@@ -1142,6 +1262,7 @@ function DataRow({
   onClear,
   onBarClick,
   onDragStart,
+  loadingWeeks,
 }: {
   row: ProdRow
   isSchedule: boolean
@@ -1149,6 +1270,7 @@ function DataRow({
   columns: Column[]
   colW: number
   minIndex: number
+  canvasCols: number
   showWeekends: boolean
   scrollLeft: number
   collapsed: boolean
@@ -1160,6 +1282,7 @@ function DataRow({
   onClear: () => void
   onBarClick: (id: string, iso: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
+  loadingWeeks: Set<string>
 }) {
   const level = isSchedule ? rowLevel(row) : 0
   const group = row.kind !== 'tech'
@@ -1213,14 +1336,14 @@ function DataRow({
       </div>
       <div
         className={`prod-days${topGroup ? ' is-top' : ''}`}
-        style={{ width: columns.length * colW, height: ROW_H }}
+        style={{ width: canvasCols * colW, height: ROW_H }}
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest('.prod-handle, .prod-bar')) return
           const rect = event.currentTarget.getBoundingClientRect()
           const x = event.clientX - rect.left
           const hit = bars.find((bar) => {
             if (bar.readOnly) return false
-            const box = barBox(bar.start, bar.end, minIndex, colW, columns.length)
+            const box = barBox(bar.start, bar.end, minIndex, colW, canvasCols)
             return Boolean(box && x >= box.left && x <= box.left + box.width)
           })
           if (hit) onDragStart(event, hit, 'move')
@@ -1229,7 +1352,7 @@ function DataRow({
         {columns.map((col) => (
           <div
             key={col.id}
-            className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}`}
+            className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
             style={{ left: (col.index - minIndex) * colW, width: colW }}
             onClick={onClear}
           />
@@ -1240,7 +1363,7 @@ function DataRow({
             bar={bar}
             colW={colW}
             minIndex={minIndex}
-            colCount={columns.length}
+            colCount={canvasCols}
             showWeekends={showWeekends}
             scrollLeft={scrollLeft}
             selected={selected}

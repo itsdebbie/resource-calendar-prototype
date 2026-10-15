@@ -475,27 +475,50 @@ export function personHoursInWindow(
   }
 }
 
+function overlapsTsWindow(startIso: string, endIso: string, window?: { start: number; end: number }) {
+  if (!window || window.end <= window.start) return true
+  return utc(startIso) < window.end && utc(endIso) + DAY_MS > window.start
+}
+
+function dayBounds(startIso: string, endIso: string, window?: { start: number; end: number }) {
+  let from = utc(startIso)
+  let to = utc(endIso)
+  if (window && window.end > window.start) {
+    from = Math.max(from, window.start)
+    to = Math.min(to, window.end - 1)
+  }
+  return { from, to }
+}
+
 /** Conflict when booked hours on a day exceed that person's shift length, not for every overlap. */
-export function overCapacityAssignmentIds(personId: string, rows: Assignment[], includeWeekends = false) {
+export function overCapacityAssignmentIds(
+  personId: string,
+  rows: Assignment[],
+  includeWeekends = false,
+  window?: { start: number; end: number },
+) {
   const cap = dailyShiftHours(personId)
   const ids = new Set<string>()
   if (cap <= 0) return ids
+  const scoped = window ? rows.filter((row) => overlapsTsWindow(row.start, row.end, window)) : rows
   const dayHours = new Map<string, number>()
-  for (const row of rows) {
+  for (const row of scoped) {
     const h = hoursPerWorkday(row)
     const off = new Set(row.offDays)
-    const end = utc(row.end)
-    for (let t = utc(row.start); t <= end; t += DAY_MS) {
+    const { from, to } = dayBounds(row.start, row.end, window)
+    if (to < from) continue
+    for (let t = from; t <= to; t += DAY_MS) {
       if (!includeWeekends && isWeekendTs(t)) continue
       const iso = isoFromTs(t)
       if (off.has(iso)) continue
       dayHours.set(iso, (dayHours.get(iso) ?? 0) + h)
     }
   }
-  for (const row of rows) {
+  for (const row of scoped) {
     const off = new Set(row.offDays)
-    const end = utc(row.end)
-    for (let t = utc(row.start); t <= end; t += DAY_MS) {
+    const { from, to } = dayBounds(row.start, row.end, window)
+    if (to < from) continue
+    for (let t = from; t <= to; t += DAY_MS) {
       if (!includeWeekends && isWeekendTs(t)) continue
       const iso = isoFromTs(t)
       if (off.has(iso)) continue
@@ -549,9 +572,10 @@ export function collectIssues(
   rows: Assignment[],
   activeProjectIds: string[],
   includeWeekends: boolean,
+  window?: { start: number; end: number },
 ): { conflict: CalendarIssue[]; unassigned: CalendarIssue[]; overbudget: CalendarIssue[] } {
   const allowed = new Set(activeProjectIds)
-  const visible = rows.filter((row) => allowed.has(row.projectId))
+  const visible = rows.filter((row) => allowed.has(row.projectId) && overlapsTsWindow(row.start, row.end, window))
   const conflict: CalendarIssue[] = []
   const unassigned: CalendarIssue[] = []
   const overbudget: CalendarIssue[] = []
@@ -565,7 +589,7 @@ export function collectIssues(
   }
   for (const [personId, list] of byPerson) {
     if (personId === 'unassigned') continue
-    for (const id of overCapacityAssignmentIds(personId, list, includeWeekends)) {
+    for (const id of overCapacityAssignmentIds(personId, list, includeWeekends, window)) {
       if (seenConflict.has(id)) continue
       const row = list.find((r) => r.id === id)
       if (!row) continue
@@ -599,6 +623,7 @@ export function collectIssues(
 
   for (const phase of phases) {
     if (!allowed.has(phase.projectId)) continue
+    if (!overlapsTsWindow(phase.start, phase.end, window)) continue
     if (!hoursOver(phase.scheduledHours, phase.budgetHours, phase.actualHours)) continue
     overbudget.push({
       id: `overbudget:${phase.id}`,

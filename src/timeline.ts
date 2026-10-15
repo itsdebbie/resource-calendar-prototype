@@ -21,6 +21,8 @@ export const SHORT_BAR_PX = 60
 export const CREW_PANEL_KEY = 'rc-crew-panel-open'
 export const DAY_MS = 86400000
 export const BUFFER_COLS = 40
+/** Extra day/week/month columns rendered on each side of the viewport. */
+export const COLUMN_RENDER_BUFFER = 7
 export const EDGE_PX = 56
 export const ZOOM_ORDER: Zoom[] = ['days', 'weeks', 'months', 'quarters', 'year']
 /** 0 = Sunday. Later this can follow a company first-day-of-week setting. */
@@ -242,6 +244,27 @@ export function columnsInExtent(zoom: Zoom, min: number, max: number): Column[] 
   const columns: Column[] = []
   for (let i = min; i <= max; i++) columns.push(columnAtIndex(zoom, i))
   return columns
+}
+
+/** Visible columns plus a buffer. Day zoom buffers one week of columns each side. */
+export function columnRenderBuffer(zoom: Zoom) {
+  if (zoom === 'days') return COLUMN_RENDER_BUFFER
+  if (zoom === 'weeks') return 1
+  return 1
+}
+
+export function sliceVisibleColumns(
+  columns: Column[],
+  firstVisible: number,
+  visibleCount: number,
+  bufferCols: number,
+) {
+  const minIndex = columns[0]?.index ?? firstVisible
+  const maxIndex = columns[columns.length - 1]?.index ?? firstVisible
+  const start = Math.max(minIndex, firstVisible - bufferCols)
+  const end = Math.min(maxIndex, firstVisible + visibleCount + bufferCols)
+  const slice = columns.filter((col) => col.index >= start && col.index <= end)
+  return slice.length > 0 ? slice : columns.slice(0, Math.min(columns.length, 24))
 }
 
 export function rangeOf(columns: Column[]) {
