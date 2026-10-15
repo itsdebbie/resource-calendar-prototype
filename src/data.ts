@@ -65,6 +65,8 @@ export type Assignment = {
   confirmed?: boolean
   kind?: 'unassigned'
   address?: string
+  /** Logged hours for this booking. Omitted means actual matches scheduled. */
+  actualHours?: number
 }
 
 export const people: Person[] = [
@@ -227,6 +229,7 @@ export const assignments: Assignment[] = [
     personId: 'kevin',
     title: 'Walkthrough',
     label: '8h',
+    actualHours: 10,
     start: '2026-01-14',
     end: '2026-01-14',
   },
@@ -440,6 +443,24 @@ export function assignmentWorkdaysInWindow(row: Assignment, window: { start: num
   return assignmentDaysInWindow(row, window, false)
 }
 
+function assignmentSpanWindow(row: Assignment) {
+  return { start: utc(row.start), end: utc(row.end) + DAY_MS }
+}
+
+function assignmentActualInWindow(
+  row: Assignment,
+  window: { start: number; end: number },
+  includeWeekends = false,
+) {
+  const days = assignmentDaysInWindow(row, window, includeWeekends)
+  if (days <= 0) return 0
+  const scheduled = hoursPerWorkday(row) * days
+  if (row.actualHours == null) return scheduled
+  const totalDays = assignmentDaysInWindow(row, assignmentSpanWindow(row), includeWeekends)
+  if (totalDays <= 0) return 0
+  return row.actualHours * (days / totalDays)
+}
+
 export function personHoursInWindow(
   personId: string,
   rows: Assignment[],
@@ -452,11 +473,14 @@ export function personHoursInWindow(
     (sum, row) => sum + hoursPerWorkday(row) * assignmentDaysInWindow(row, window, includeWeekends),
     0,
   )
+  const actual = mine.reduce((sum, row) => sum + assignmentActualInWindow(row, window, includeWeekends), 0)
   const days = countedDaysInWindow(window, includeWeekends)
   const shift = dailyShiftHours(personId)
   const cap = shift * days
   const bookedR = Math.round(booked)
+  const actualR = Math.round(actual)
   const capR = Math.round(cap)
+  const extra = Math.max(0, actualR - bookedR)
   const names = mine
     .filter((row) => assignmentDaysInWindow(row, window, includeWeekends) > 0)
     .map((row) => {
@@ -465,12 +489,14 @@ export function personHoursInWindow(
       return [name, row.label, project].filter(Boolean).join(' ')
     })
   const dayWord = includeWeekends ? 'days' : 'workdays'
-  const breakdown = `${bookedR}h scheduled in the visible dates / ${capR}h available (${days} ${dayWord} × ${shift}h)${names.length ? ` · ${names.join(' + ')}` : ''}`
+  const breakdown = `${bookedR}h scheduled / ${actualR}h actual in the visible dates · ${capR}h available (${days} ${dayWord} × ${shift}h)${names.length ? ` · ${names.join(' + ')}` : ''}`
   return {
     booked: bookedR,
+    actual: actualR,
+    extra,
     cap: capR,
     over: capR > 0 && bookedR > capR,
-    text: personId === 'unassigned' ? 'No technician' : `${bookedR} / ${capR}h in view`,
+    text: personId === 'unassigned' ? 'No technician' : `Scheduled ${bookedR}h / Actual ${actualR}h`,
     detail: personId === 'unassigned' ? names.join(' + ') : [rangeLabel, `${shift}h shift`, breakdown].filter(Boolean).join('\n'),
   }
 }

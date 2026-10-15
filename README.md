@@ -13,6 +13,10 @@ Interactive Anvil2 prototype of the signed-off Group by Projects resource calend
 
 - **Prod + scroll** (`#/prod/schedule` and `#/prod/calendar`): production styling, two weeks in view, infinite horizontal scroll, Today + a single date picker (no prev/next or range field), move and resize with edge auto-scroll, a live date tooltip, snap-to-day, undo toast, and the edit flyout.
 
+## Decisions and assumptions
+
+- **Technician actual over scheduled (14 Oct 2026):** per-tech rows in the redesign left panel show scheduled and actual hours only (no budget — budget stays on project/phase rows). When actual exceeds scheduled, both numbers stay visible (e.g. `Scheduled 8h / Actual 10h`) with a subdued `+2h` variance. No red and no warning icon for that case. Red conflict is only for **scheduled hours over that tech’s available hours**, using the existing conflict treatment. This follows Float / Smartsheet / MS Project / Resource Guru / monday patterns. Pending Jade’s confirmation.
+
 ```bash
 npm install
 npm run dev
