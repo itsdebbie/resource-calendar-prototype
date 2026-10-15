@@ -480,7 +480,6 @@ export function personHoursInWindow(
   const bookedR = Math.round(booked)
   const actualR = Math.round(actual)
   const capR = Math.round(cap)
-  const extra = Math.max(0, actualR - bookedR)
   const names = mine
     .filter((row) => assignmentDaysInWindow(row, window, includeWeekends) > 0)
     .map((row) => {
@@ -493,7 +492,6 @@ export function personHoursInWindow(
   return {
     booked: bookedR,
     actual: actualR,
-    extra,
     cap: capR,
     over: capR > 0 && bookedR > capR,
     text: personId === 'unassigned' ? 'No technician' : `Scheduled ${bookedR}h / Actual ${actualR}h`,

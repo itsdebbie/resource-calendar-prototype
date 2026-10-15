@@ -15,7 +15,8 @@ Interactive Anvil2 prototype of the signed-off Group by Projects resource calend
 
 ## Decisions and assumptions
 
-- **Technician actual over scheduled (14 Oct 2026):** per-tech rows in the redesign left panel show scheduled and actual hours only (no budget — budget stays on project/phase rows). When actual exceeds scheduled, both numbers stay visible (e.g. `Scheduled 8h / Actual 10h`) with a subdued `+2h` variance. No red and no warning icon for that case. Red conflict is only for **scheduled hours over that tech’s available hours**, using the existing conflict treatment. This follows Float / Smartsheet / MS Project / Resource Guru / monday patterns. Pending Jade’s confirmation.
+- **Technician rows (Jade, 12 Oct 2026):** per-tech rows in the redesign left panel show scheduled and actual hours only. No budget on tech rows — budget stays on project/phase rows (e.g. a change order with 20 total hours). Overbooking is **scheduled hours over that tech’s available hours**, shown with the existing red conflict treatment (danger color, warning icon, row tint).
+- **Actual over scheduled (open question for Jade):** the left panel shows both numbers when they differ (e.g. `Scheduled 8h / Actual 10h`) but does not flag that case. Whether to treat actual over scheduled as a conflict is still open.
 
 ```bash
 npm install

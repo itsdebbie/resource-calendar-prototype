@@ -900,13 +900,6 @@ body.rc-grabbing {
   color: var(--rc-danger);
 }
 
-.rc-hours-variance {
-  color: var(--a2-foreground-color-subdued, #707070);
-  font-size: 12px;
-  font-weight: 400;
-  flex: none;
-}
-
 .rc-nested .rc-gutter {
   padding-left: 28px;
 }

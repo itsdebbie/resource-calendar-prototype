@@ -1417,7 +1417,7 @@ function RcGridRow({
           <div className="rc-gutter-copy">
             <Name>{person?.name ?? 'Unassigned'}</Name>
             {meta ? (
-              <HoursMeta scheduled={meta.booked} actual={meta.actual} extra={meta.extra} over={meta.over} detail={meta.detail} />
+              <HoursMeta scheduled={meta.booked} actual={meta.actual} over={meta.over} detail={meta.detail} />
             ) : (
               <Text size="small" subdued>
                 Needs a tech
@@ -1452,13 +1452,11 @@ function RcGridRow({
 function HoursMeta({
   scheduled,
   actual,
-  extra,
   over,
   detail,
 }: {
   scheduled: number
   actual: number
-  extra: number
   over: boolean
   detail?: string
 }) {
@@ -1471,7 +1469,6 @@ function HoursMeta({
           <Text size="small" subdued={!over} className={over ? 'rc-hours-warn' : undefined}>
             {label}
           </Text>
-          {extra > 0 ? <span className="rc-hours-variance">+{extra}h</span> : null}
         </span>
       </Tooltip.Trigger>
       <Tooltip.Content>{detail || label}</Tooltip.Content>
@@ -1526,7 +1523,7 @@ function PersonAssignmentRow({
         <Avatar name={person.name} size="small" color={person.color} />
         <div className="rc-gutter-copy">
           <Name>{person.name}</Name>
-          <HoursMeta scheduled={meta.booked} actual={meta.actual} extra={meta.extra} over={meta.over} detail={meta.detail} />
+          <HoursMeta scheduled={meta.booked} actual={meta.actual} over={meta.over} detail={meta.detail} />
         </div>
       </div>
       <PackedPersonBars rows={rows} personId={personId} showLabels />
