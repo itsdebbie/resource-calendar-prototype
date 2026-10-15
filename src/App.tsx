@@ -40,6 +40,7 @@ function App() {
       <div className="app-toaster">
         <Toaster id="main-toaster" />
       </div>
+      <div className="app-main">
       {route === 'redesign' ? (
         <Page>
           <Page.Header
@@ -63,6 +64,7 @@ function App() {
       ) : (
         <ProdPage view={route === 'calendar' ? 'calendar' : 'schedule'} />
       )}
+      </div>
       <PrototypeScrollSwitch />
     </div>
     </ScrollDemoProvider>

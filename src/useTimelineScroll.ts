@@ -324,8 +324,9 @@ export function useTimelineScroll(
       const { iso, offsetPx } = anchorRef.current
       const target = Math.max(0, worldXForDate(zoom, extent.min, colW, iso) - offsetPx)
       el.scrollLeft = target
-      const stuck = target > colW && el.scrollLeft < colW && el.scrollWidth <= el.clientWidth + 4
-      if (stuck && frames < 8) {
+      const missed = Math.abs(el.scrollLeft - target) > 2
+      const canGrow = el.scrollWidth <= el.clientWidth + 4 && target > 2
+      if (missed && frames < 24 && (canGrow || el.scrollLeft < 2)) {
         frames += 1
         raf = requestAnimationFrame(apply)
         return
@@ -334,7 +335,7 @@ export function useTimelineScroll(
       prevMin.current = extent.min
       pendingAlign.current = false
       readyRef.current = true
-      if (Math.abs(offsetPx) < 1) {
+      if (Math.abs(offsetPx) < 1 && !missed) {
         const idx = columnIndexAt(zoom, utc(iso))
         setFirstVisible((prev) => (prev === idx ? prev : idx))
         const count = Math.max(8, Math.ceil(visiblePx(el, gutterRef.current) / colW))
