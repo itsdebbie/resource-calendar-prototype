@@ -21,8 +21,10 @@ export const SHORT_BAR_PX = 60
 export const CREW_PANEL_KEY = 'rc-crew-panel-open'
 export const DAY_MS = 86400000
 export const BUFFER_COLS = 40
-/** Extra day/week/month columns rendered on each side of the viewport. */
-export const COLUMN_RENDER_BUFFER = 7
+/** Day zoom paints this many columns (~3 weeks) in the viewport. */
+export const DAY_VIEW_DAYS = 21
+/** Extra columns rendered on each side of the viewport so panning never hits a blank void. */
+export const COLUMN_RENDER_BUFFER = 21
 /**
  * Drag auto-scroll zone width in px. Unvalidated prototype guess — see README.
  * @see EDGE_SCROLL_MIN_PX
@@ -39,8 +41,8 @@ export const EDGE_SCROLL_GAIN = 3
 export const ZOOM_ORDER: Zoom[] = ['days', 'weeks', 'months', 'quarters', 'year']
 /** 0 = Sunday. Later this can follow a company first-day-of-week setting. */
 export const WEEK_START_DAY = 0
-/** Invisible sizer for the toolbar picker; longest day-range label. */
-export const PICKER_LABEL_SIZER = 'Sep 30 – Oct 13, 2026'
+/** Invisible sizer for the toolbar picker; longest 21-day range label. */
+export const PICKER_LABEL_SIZER = 'Sep 30 to Oct 20, 2026'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export const MONTH_LABELS = MONTHS
@@ -103,12 +105,17 @@ export function pickerAnchorStart(zoom: Zoom, firstVisibleIso: string, pinnedIso
 export function pickerLabel(zoom: Zoom, startIso: string) {
   const d = new Date(utc(startIso))
   if (zoom === 'days' || zoom === 'weeks') {
-    const end = addDays(startIso, 13)
+    const span = zoom === 'days' ? DAY_VIEW_DAYS : 14
+    const end = addDays(startIso, span - 1)
     const a = new Date(utc(startIso))
     const b = new Date(utc(end))
-    const left = `${MONTHS[a.getUTCMonth()]} ${a.getUTCDate()}`
-    const right = `${MONTHS[b.getUTCMonth()]} ${b.getUTCDate()}`
-    return `${left} – ${right}, ${b.getUTCFullYear()}`
+    const year = b.getUTCFullYear()
+    const leftMonth = MONTHS[a.getUTCMonth()]
+    const rightMonth = MONTHS[b.getUTCMonth()]
+    if (a.getUTCMonth() === b.getUTCMonth() && a.getUTCFullYear() === year) {
+      return `${leftMonth} ${a.getUTCDate()} to ${b.getUTCDate()}, ${year}`
+    }
+    return `${leftMonth} ${a.getUTCDate()} to ${rightMonth} ${b.getUTCDate()}, ${year}`
   }
   if (zoom === 'months') return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
   if (zoom === 'quarters') return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`
@@ -134,7 +141,7 @@ export function zoomStep(zoom: Zoom, direction: 1 | -1): Zoom {
 
 export function columnWidth(zoom: Zoom, viewportPx = 980) {
   const w = Math.min(2200, Math.max(420, viewportPx))
-  if (zoom === 'days') return Math.min(92, Math.max(56, Math.round(w / 14)))
+  if (zoom === 'days') return Math.max(32, Math.round(w / DAY_VIEW_DAYS))
   if (zoom === 'weeks') return Math.min(120, Math.max(72, Math.round(w / 12)))
   if (zoom === 'months') return Math.min(160, Math.max(96, Math.round(w / 7)))
   if (zoom === 'quarters') return Math.min(220, Math.max(132, Math.round(w / 5)))
@@ -258,11 +265,13 @@ export function columnsInExtent(zoom: Zoom, min: number, max: number): Column[] 
   return columns
 }
 
-/** Visible columns plus a buffer. Day zoom buffers one week of columns each side. */
+/** Visible columns plus a buffer at least as large as the extend-on-drop pad. */
 export function columnRenderBuffer(zoom: Zoom) {
-  if (zoom === 'days') return COLUMN_RENDER_BUFFER
-  if (zoom === 'weeks') return 1
-  return 1
+  if (zoom === 'days') return Math.max(COLUMN_RENDER_BUFFER, DAY_VIEW_DAYS)
+  if (zoom === 'weeks') return 9
+  if (zoom === 'months') return 4
+  if (zoom === 'quarters') return 6
+  return 2
 }
 
 export function sliceVisibleColumns(
@@ -427,6 +436,12 @@ export function resizeSpanEnd(span: Span, newEnd: string): Span {
   return { ...span, end: newEnd, offDays }
 }
 
+export function resizeSpanStart(span: Span, newStart: string): Span {
+  if (utc(newStart) > utc(span.end)) return { ...span, start: span.end, offDays: span.offDays.filter((d) => d > span.end) }
+  const offDays = span.offDays.filter((d) => d >= newStart && d <= span.end)
+  return { ...span, start: newStart, offDays }
+}
+
 export function moveOneDay(span: Span, fromDay: string, toDay: string): Span {
   const days = activeDaySet(span.start, span.end, span.offDays)
   if (!days.has(fromDay) && fromDay !== toDay) return span
@@ -573,6 +588,7 @@ export function barPixelBox(startIso: string, endIso: string, columns: Column[],
   return { ...style, leftPx, widthPx, rightPx: leftPx + widthPx }
 }
 
-export function isEditableZoom(zoom: Zoom) {
-  return zoom === 'days' || zoom === 'weeks'
+/** Locked 15 Oct 2026: move and resize in every zoom. */
+export function isEditableZoom(_zoom?: Zoom) {
+  return true
 }

@@ -13,6 +13,10 @@
   --rc-head-h: calc(var(--rc-head-band) + var(--rc-head-cols));
   --rc-today: var(--a2-status-color-info, #0265dc);
   --rc-danger: var(--a2-status-color-danger, #d62100);
+  --rc-duration: var(--a2-duration-default, 200ms);
+  --rc-duration-fast: var(--a2-duration-fast, 100ms);
+  /* ASSUMPTION: Anvil 2 has no easing tokens. CSS ease-out. */
+  --rc-easing: ease-out;
   min-width: 0;
   width: 100%;
   max-width: 100%;
@@ -83,6 +87,7 @@
   min-width: 0;
   width: 100%;
   max-width: 100%;
+  overflow: hidden;
 }
 
 .rc-card {
@@ -101,11 +106,10 @@
 }
 
 .rc-scroll {
-  overflow-x: scroll;
+  overflow-x: auto;
   overflow-y: auto;
   max-height: calc(100vh - 360px);
   overscroll-behavior-x: contain;
-  contain: inline-size;
   min-width: 0;
   width: 100%;
   max-width: 100%;
@@ -462,7 +466,7 @@
   border-radius: 8px;
   background: var(--a2-background-color-default, #fff);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   color: var(--a2-foreground-color-default, #040404);
   font-variant-numeric: tabular-nums;
@@ -642,6 +646,45 @@
   min-width: 0;
 }
 
+.rc-bar-wrap {
+  position: absolute;
+  top: 50%;
+  margin-top: calc(var(--rc-bar-h) / -2);
+  height: var(--rc-bar-h);
+  z-index: 2;
+}
+
+.rc-bar-wrap:not(.is-dragging) {
+  transition: left var(--rc-duration-fast) var(--rc-easing), width var(--rc-duration-fast) var(--rc-easing);
+}
+
+.rc-timeline.is-packed .rc-bar-wrap {
+  top: calc(var(--rc-lane-pad) + var(--rc-lane) * (var(--rc-lane-h) + var(--rc-lane-gap)));
+  margin-top: 0;
+}
+
+.rc-bar-wrap .rc-bar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  left: auto;
+  top: 0;
+  margin-top: 0;
+}
+
+.rc-bar-select-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: calc(var(--rc-bar-r) + 3px);
+  box-shadow: 0 0 0 2px var(--a2-background-color-default, #fff), 0 0 0 4px var(--rc-today);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.rc-chip-wrap.is-selected {
+  z-index: 4;
+}
+
 .rc-bar {
   position: absolute;
   top: 50%;
@@ -667,8 +710,9 @@
   user-select: none;
 }
 
-.rc-timeline.is-packed .rc-bar {
-  top: calc(var(--rc-lane-pad) + var(--rc-lane) * (var(--rc-lane-h) + var(--rc-lane-gap)));
+.rc-timeline.is-packed .rc-bar-wrap .rc-bar,
+.rc-timeline.is-packed .rc-chip-wrap .rc-bar {
+  top: 0;
   margin-top: 0;
 }
 
@@ -726,24 +770,46 @@
 
 .rc-bar-handle {
   position: absolute;
-  right: 0;
   top: 0;
-  width: 10px;
+  width: 12px;
   height: 100%;
   cursor: ew-resize;
-  z-index: 2;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity var(--rc-duration) var(--rc-easing);
+}
+
+.rc-bar-handle.is-start {
+  left: 0;
+}
+
+.rc-bar-handle.is-end {
+  right: 0;
+}
+
+.rc-bar-wrap:hover .rc-bar-handle,
+.rc-bar-wrap.is-selected .rc-bar-handle,
+.rc-bar-wrap.is-dragging .rc-bar-handle {
+  opacity: 1;
 }
 
 .rc-bar-handle::after {
   content: '';
   position: absolute;
-  right: 3px;
   top: 22%;
   height: 56%;
   width: 2px;
   border-radius: 1px;
   background: currentColor;
   opacity: 0.4;
+}
+
+.rc-bar-handle.is-start::after {
+  left: 3px;
+}
+
+.rc-bar-handle.is-end::after {
+  right: 3px;
 }
 
 .rc-scroll.is-dragging,
@@ -820,14 +886,11 @@ body.rc-grabbing {
 }
 
 .rc-bar.is-selected {
-  box-shadow: 0 0 0 2px var(--rc-bar-text, #fff), 0 0 0 4px var(--rc-today);
+  box-shadow: none;
 }
 
 .rc-bar.is-conflict.is-selected {
-  box-shadow:
-    0 0 0 2px var(--rc-bar-text, #fff),
-    0 0 0 4px var(--rc-today),
-    inset 0 0 0 2px var(--rc-bar-text, currentColor);
+  box-shadow: inset 0 0 0 2px var(--rc-bar-text, currentColor);
 }
 
 .rc-day-guide {

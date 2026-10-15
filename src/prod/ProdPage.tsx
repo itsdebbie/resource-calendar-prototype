@@ -10,14 +10,13 @@ import {
 import {
   Avatar,
   Button,
-  Calendar,
   Checkbox,
   Chip,
   DateFieldSingle,
   Dialog,
   Icon,
   NumberField,
-  Popover,
+  SegmentedControl,
   Skeleton,
   Switch,
   Tab,
@@ -26,8 +25,10 @@ import {
   TimeField,
   toast,
 } from '@servicetitan/anvil2'
+import type { GroupBy, Zoom } from '../data'
 import {
   addDays,
+  columnAtIndex,
   columnIndexAt,
   columnRenderBuffer,
   diffDays,
@@ -35,15 +36,22 @@ import {
   inTimeWindow,
   isoFromTs,
   monthBands,
+  pickerAnchorStart,
+  pickerLabel,
   sliceVisibleColumns,
   utc,
+  worldXForDate,
+  yearBands,
+  zoomStep,
   type Column,
   type Span,
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
+import { DateJumpPicker } from '../DateJumpPicker'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
-import { barClipPath, extendEndAfterDrop, initialExtendBounds, useScrollDemo } from '../scrollDemo'
+import { applyExtendOnDrop, barClipPath, growBoundToward, initialExtendBounds, useScrollDemo } from '../scrollDemo'
+import { snapDragIso, type ExtendEdge } from '../interaction'
 import {
   CalendarIcon,
   ChevronRightIcon,
@@ -57,6 +65,7 @@ import {
 } from '../icons'
 import {
   BAR_RADIUS,
+  calendarProjectRows,
   calendarRows,
   firstLevelGroupIds,
   groupColorForRow,
@@ -82,7 +91,6 @@ import {
 import './prod.css'
 
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const DAYS_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const DAYS_ABBR = ['SU', 'M', 'T', 'W', 'TH', 'F', 'SA']
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const MONTHS_LONG = [
@@ -116,13 +124,6 @@ function shift(span: Span, days: number): Span {
   return { start: addDays(span.start, days), end: addDays(span.end, days), offDays: [] }
 }
 
-function pickerLabel(iso: string) {
-  const d = new Date(utc(iso))
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  return `${DAYS_LONG[d.getUTCDay()]}, ${mm}/${dd}/${d.getUTCFullYear()}`
-}
-
 function liveRangeLabel(start: string, end: string) {
   const a = new Date(utc(start))
   const b = new Date(utc(end))
@@ -139,16 +140,17 @@ function weekendsIn(start: string, end: string) {
   return out
 }
 
-function barBox(start: string, end: string, minIndex: number, colW: number, colCount: number) {
-  const startIdx = columnIndexAt('days', utc(start))
-  const endIdx = columnIndexAt('days', utc(end))
-  const visStart = Math.max(startIdx, minIndex)
-  const visEnd = Math.min(endIdx, minIndex + colCount - 1)
-  if (visEnd < visStart) return null
+function barBox(start: string, end: string, minIndex: number, colW: number, colCount: number, zoom: Zoom) {
+  const left = worldXForDate(zoom, minIndex, colW, start)
+  const right = worldXForDate(zoom, minIndex, colW, addDays(end, 1))
+  const canvasW = colCount * colW
+  const visLeft = Math.max(left, 0)
+  const visRight = Math.min(right, canvasW)
+  if (visRight <= visLeft) return null
   return {
-    left: (visStart - minIndex) * colW,
-    width: (visEnd - visStart + 1) * colW,
-    visStart,
+    left: visLeft,
+    width: visRight - visLeft,
+    visStart: columnIndexAt(zoom, utc(start)),
   }
 }
 
@@ -158,11 +160,6 @@ function timeLine(bar: ProdBar) {
 
 function nextBarId() {
   return `bar-${Math.random().toString(36).slice(2, 10)}`
-}
-
-function toDayIso(value: string) {
-  const iso = value.slice(0, 10)
-  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : ''
 }
 
 function eachDay(start: string, end: string) {
@@ -261,7 +258,12 @@ function ProdGrid({ view }: { view: ProdView }) {
   const isSchedule = view === 'schedule'
   const gutter = isSchedule ? SCHEDULE_GUTTER : RC_GUTTER
   const headH = isSchedule ? SCHEDULE_HEAD_H : RC_HEAD_H
-  const rows = isSchedule ? scheduleRows : calendarRows
+  const [zoom, setZoom] = useState<Zoom>('days')
+  const [groupBy, setGroupBy] = useState<GroupBy>('people')
+  const [pinnedIso, setPinnedIso] = useState<string | null>(PROD_TODAY)
+  const zoomLock = useRef(0)
+  const rows = isSchedule ? scheduleRows : groupBy === 'projects' ? calendarProjectRows : calendarRows
+  const hierarchical = isSchedule || groupBy === 'projects'
   const [bars, setBars] = useState<ProdBar[]>([])
   const dirtyIds = useRef(new Set<string>())
   const removedIds = useRef(new Set<string>())
@@ -294,26 +296,74 @@ function ProdGrid({ view }: { view: ProdView }) {
   const { mode: scrollMode } = useScrollDemo()
   const seedBars = isSchedule ? initialScheduleBars : initialCalendarBars
   const seedBounds = useMemo(() => initialExtendBounds(PROD_TODAY, seedBars), [seedBars])
+  const [boundStart, setBoundStart] = useState(seedBounds.start)
   const [boundEnd, setBoundEnd] = useState(seedBounds.end)
+  const hitEdgeRef = useRef<ExtendEdge | null>(null)
   useEffect(() => {
-    if (scrollMode === 'extend') setBoundEnd(seedBounds.end)
-  }, [scrollMode, seedBounds.end])
-  const timeline = useTimelineScroll('days', scrollRef, {
+    setBoundStart(seedBounds.start)
+    setBoundEnd(seedBounds.end)
+    hitEdgeRef.current = null
+  }, [scrollMode, seedBounds.start, seedBounds.end])
+  const onNeedBound = useCallback((edge: ExtendEdge, iso: string) => {
+    hitEdgeRef.current = edge
+    if (edge === 'end') setBoundEnd((prev) => growBoundToward(iso, prev, 'end'))
+    else setBoundStart((prev) => growBoundToward(iso, prev, 'start'))
+  }, [])
+  const timeline = useTimelineScroll(zoom, scrollRef, {
     gutter,
     initialIso: PROD_TODAY,
     mode: scrollMode,
-    boundStartIso: scrollMode === 'extend' ? seedBounds.start : undefined,
-    boundEndIso: scrollMode === 'extend' ? boundEnd : undefined,
+    boundStartIso: boundStart,
+    boundEndIso: boundEnd,
+    onNeedBound,
   })
-  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, firstVisible, scrollLeft, viewWindow, visibleCount, autoScrollFromPointer } =
-    timeline
+  const {
+    columns,
+    colW,
+    canvasWidth,
+    dateAtClientX,
+    jumpTo,
+    firstVisible,
+    scrollLeft,
+    viewWindow,
+    visibleCount,
+    autoScrollFromPointer,
+    setAnchor,
+  } = timeline
+  const viewWindowRef = useRef(viewWindow)
+  viewWindowRef.current = viewWindow
+  const boundStartRef = useRef(boundStart)
+  const boundEndRef = useRef(boundEnd)
+  boundStartRef.current = boundStart
+  boundEndRef.current = boundEnd
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
   const visColumns = useMemo(
-    () => sliceVisibleColumns(columns, firstVisible, visibleCount, columnRenderBuffer('days')),
-    [columns, firstVisible, visibleCount],
+    () => sliceVisibleColumns(columns, firstVisible, visibleCount, columnRenderBuffer(zoom)),
+    [columns, firstVisible, visibleCount, zoom],
   )
   const headerCols = useMemo(
-    () => sliceVisibleColumns(columns, firstVisible, visibleCount, 31),
-    [columns, firstVisible, visibleCount],
+    () => sliceVisibleColumns(columns, firstVisible, visibleCount, Math.max(31, columnRenderBuffer(zoom))),
+    [columns, firstVisible, visibleCount, zoom],
+  )
+  const firstVisibleIso = isoFromTs(columnAtIndex(zoom, firstVisible).start)
+  const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
+  const pickerText = pickerLabel(zoom, pickerStart)
+  const changeZoom = useCallback(
+    (next: Zoom, iso?: string, offsetPx?: number) => {
+      if (next === zoom) return
+      setAnchor(iso ?? firstVisibleIso, offsetPx ?? 0)
+      if (next !== 'days' && next !== 'weeks') setPinnedIso(null)
+      setZoom(next)
+    },
+    [zoom, firstVisibleIso, setAnchor],
+  )
+  const pickDate = useCallback(
+    (iso: string) => {
+      setPinnedIso(iso)
+      jumpTo(iso, 0)
+    },
+    [jumpTo],
   )
   const fetchWeek = useCallback(
     (week: string) => fetchProdBarWeek(isSchedule ? initialScheduleBars : initialCalendarBars, week),
@@ -369,7 +419,6 @@ function ProdGrid({ view }: { view: ProdView }) {
   const autoScrollRef = useRef(autoScrollFromPointer)
   autoScrollRef.current = autoScrollFromPointer
   const minIndex = columns[0]?.index ?? 0
-  const firstIso = columns.find((c) => c.index === firstVisible)?.id ?? PROD_TODAY
 
   useEffect(() => {
     dirtyIds.current = new Set()
@@ -386,6 +435,22 @@ function ProdGrid({ view }: { view: ProdView }) {
     selectAnchor.current = null
     jumpTo(PROD_TODAY)
   }, [isSchedule, jumpTo])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return
+      event.preventDefault()
+      const now = performance.now()
+      if (now - zoomLock.current < 160) return
+      zoomLock.current = now
+      const rect = el.getBoundingClientRect()
+      changeZoom(zoomStep(zoom, event.deltaY < 0 ? -1 : 1), dateAtClientX(event.clientX), event.clientX - rect.left - gutter)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoom, dateAtClientX, changeZoom, gutter])
 
   useEffect(() => {
     const loaded = chunks.loadedWeeks
@@ -412,9 +477,9 @@ function ProdGrid({ view }: { view: ProdView }) {
   }, [chunks.items, chunks.loadedWeeks])
 
   const visibleRows = useMemo(() => {
-    if (!isSchedule) return rows
-    return rows.filter((row) => !rowHidden(row, collapsed))
-  }, [rows, collapsed, isSchedule])
+    if (!hierarchical) return rows
+    return rows.filter((row) => !rowHidden(row, collapsed, rows))
+  }, [rows, collapsed, hierarchical])
 
   const rowSlice = useMemo(
     () => visibleRowWindow(visibleRows.length, Math.max(0, scrollTop - headH), Math.max(ROW_H, viewportH - headH), ROW_H),
@@ -466,9 +531,12 @@ function ProdGrid({ view }: { view: ProdView }) {
         document.body.classList.add('prod-grabbing')
       }
       if (!drag.moved) return
-      const date = dateAtClientXRef.current(clientX)
+      const raw = dateAtClientXRef.current(clientX)
+      const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize-end' ? 'end' : 'point'
+      const date = snapDragIso(zoom, raw, snapEdge)
+      const origin = snapDragIso(zoom, drag.originDate, 'point')
       let next = drag.snapshot
-      if (drag.mode === 'move') next = shift(drag.snapshot, diffDays(drag.originDate, date))
+      if (drag.mode === 'move') next = shift(drag.snapshot, diffDays(origin, date))
       else if (drag.mode === 'resize-start') next = resizeStart(drag.snapshot, date)
       else next = resizeEnd(drag.snapshot, date)
       let nextRow = drag.originRow
@@ -521,7 +589,7 @@ function ProdGrid({ view }: { view: ProdView }) {
         prev && prev.x === clientX && prev.y === clientY && prev.label === label ? prev : { x: clientX, y: clientY, label },
       )
     },
-    [isSchedule, setBarsUser],
+    [isSchedule, setBarsUser, zoom],
   )
   const applyDragRef = useRef(applyDrag)
   applyDragRef.current = applyDrag
@@ -536,7 +604,20 @@ function ProdGrid({ view }: { view: ProdView }) {
     if (!drag.moved) return
     if (scrollMode === 'extend') {
       const bar = barsRef.current.find((item) => item.id === drag.id)
-      if (bar) setBoundEnd((prev) => extendEndAfterDrop(bar.end, prev, viewWindow))
+      if (bar) {
+        const next = applyExtendOnDrop(
+          bar.start,
+          bar.end,
+          boundStartRef.current,
+          boundEndRef.current,
+          zoomRef.current,
+          viewWindowRef.current,
+          hitEdgeRef.current,
+        )
+        setBoundStart(next.start)
+        setBoundEnd(next.end)
+      }
+      hitEdgeRef.current = null
     }
     const before = undoRef.current
     undoRef.current = null
@@ -565,7 +646,7 @@ function ProdGrid({ view }: { view: ProdView }) {
         },
       })
     }, 0)
-  }, [isSchedule, scrollMode, viewWindow, setBarsUser])
+  }, [isSchedule, scrollMode, setBarsUser])
 
   useEffect(() => {
     const onMove = (event: PointerEvent | MouseEvent) => {
@@ -876,10 +957,23 @@ function ProdGrid({ view }: { view: ProdView }) {
               {allFirstCollapsed ? 'Expand All' : 'Collapse All'}
             </Button>
           ) : null}
-          <Button size="small" appearance="secondary" onClick={() => jumpTo(PROD_TODAY)}>
+          <Button size="small" appearance="secondary" onClick={() => pickDate(PROD_TODAY)}>
             Today
           </Button>
-          <DatePicker value={firstIso} onChange={(iso) => jumpTo(iso)} />
+          <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
+          {!isSchedule ? (
+            <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
+              <SegmentedControl.Segment value="people">People</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
+            </SegmentedControl>
+          ) : null}
+          <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+            <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+            <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+            <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+            <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+            <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+          </SegmentedControl>
           <div className="prod-toolbar-end">
             {!isSchedule ? (
               <Switch label="Show Weekends" checked={showWeekends} onChange={(_, state) => setShowWeekends(state.checked)} />
@@ -908,6 +1002,8 @@ function ProdGrid({ view }: { view: ProdView }) {
             <div className="prod-canvas" style={{ width: canvasWidth }}>
               <HeadRow
                 isSchedule={isSchedule}
+                groupBy={groupBy}
+                zoom={zoom}
                 gutter={gutter}
                 headH={headH}
                 columns={headerCols}
@@ -923,6 +1019,9 @@ function ProdGrid({ view }: { view: ProdView }) {
                 <DataRow
                   key={row.id}
                   row={row}
+                  rows={rows}
+                  hierarchical={hierarchical}
+                  zoom={zoom}
                   isSchedule={isSchedule}
                   gutter={gutter}
                   columns={visColumns}
@@ -1116,47 +1215,10 @@ function ProdGrid({ view }: { view: ProdView }) {
   )
 }
 
-function DatePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onClose={() => setOpen(false)} placement="bottom-start" disableCaret>
-      <Popover.Trigger>
-        {(props) => (
-          <button
-            type="button"
-            className="prod-date-btn"
-            {...props}
-            onClick={() => setOpen((current) => !current)}
-          >
-            <Icon svg={CalendarIcon} size="small" inherit />
-            {pickerLabel(value)}
-            <span className="prod-date-caret" aria-hidden>
-              ▾
-            </span>
-          </button>
-        )}
-      </Popover.Trigger>
-      <Popover.Content>
-        <div className="prod-date-pop">
-          <Calendar
-            value={value}
-            defaultFocusedDate={value}
-            onSelection={({ value: next }) => {
-              if (typeof next !== 'string' || !next) return
-              const iso = toDayIso(next)
-              if (!iso) return
-              onChange(iso)
-              setOpen(false)
-            }}
-          />
-        </div>
-      </Popover.Content>
-    </Popover>
-  )
-}
-
 function HeadRow({
   isSchedule,
+  groupBy,
+  zoom,
   gutter,
   headH,
   columns,
@@ -1168,6 +1230,8 @@ function HeadRow({
   canvasCols,
 }: {
   isSchedule: boolean
+  groupBy: GroupBy
+  zoom: Zoom
   gutter: number
   headH: number
   columns: Column[]
@@ -1178,7 +1242,9 @@ function HeadRow({
   loadingWeeks: Set<string>
   canvasCols: number
 }) {
-  const months = monthBands(columns)
+  const showMonthBand = zoom === 'days' || zoom === 'weeks'
+  const bands = showMonthBand ? monthBands(columns) : yearBands(columns)
+  const today = utc(PROD_TODAY)
   return (
     <div
       className="prod-head"
@@ -1194,32 +1260,34 @@ function HeadRow({
             <span>Name</span>
           </>
         ) : (
-          <span>Technicians</span>
+          <span>{groupBy === 'projects' ? 'Projects' : 'Technicians'}</span>
         )}
       </div>
       <div className="prod-days" style={{ width: canvasCols * colW, height: headH }}>
-        {months.map((band) => {
-          const [yearStr, monthStr] = band.id.split('-')
-          const month = Number(monthStr)
-          const year = Number(yearStr)
-          const sameYear = year === new Date(utc(PROD_TODAY)).getUTCFullYear()
+        {bands.map((band) => {
           const left = (band.startIndex - minIndex) * colW
           const width = band.span * colW
           const clipped = left < scrollLeft - 1 && left + width > scrollLeft
           const shiftPx = clipped ? Math.min(Math.max(0, scrollLeft - left), Math.max(0, width - 64)) : 0
+          let text = band.label
+          if (showMonthBand) {
+            const [yearStr, monthStr] = band.id.split('-')
+            const month = Number(monthStr)
+            const year = Number(yearStr)
+            const sameYear = year === new Date(today).getUTCFullYear()
+            text = `${MONTHS_LONG[month] ?? band.label}${sameYear ? '' : ` ${year}`}`
+          }
           return (
             <div key={band.id} className="prod-month" style={{ left, width }}>
-              <span style={{ transform: `translateX(${shiftPx}px)` }}>
-                {MONTHS_LONG[month] ?? band.label}
-                {sameYear ? '' : ` ${year}`}
-              </span>
+              <span style={{ transform: `translateX(${shiftPx}px)` }}>{text}</span>
             </div>
           )
         })}
         {columns.map((col) => {
-          const isToday = col.id === PROD_TODAY
+          const isToday = today >= col.start && today < col.end
           const weekend = Boolean(col.weekend && showWeekends)
           const day = new Date(col.start).getUTCDay()
+          const sub = zoom === 'days' ? DAYS_ABBR[day] : col.sublabel
           return (
             <div
               key={col.id}
@@ -1231,7 +1299,7 @@ function HeadRow({
               ) : null}
               <div className="prod-day-label">
                 <span className={`prod-day-num${isToday ? ' is-today' : ''}`}>{col.label}</span>
-                <span className="prod-day-wd">{DAYS_ABBR[day]}</span>
+                {sub ? <span className="prod-day-wd">{sub}</span> : null}
               </div>
             </div>
           )
@@ -1243,6 +1311,9 @@ function HeadRow({
 
 function DataRow({
   row,
+  rows,
+  hierarchical,
+  zoom,
   isSchedule,
   gutter,
   columns,
@@ -1263,6 +1334,9 @@ function DataRow({
   loadingWeeks,
 }: {
   row: ProdRow
+  rows: ProdRow[]
+  hierarchical: boolean
+  zoom: Zoom
   isSchedule: boolean
   gutter: number
   columns: Column[]
@@ -1282,11 +1356,11 @@ function DataRow({
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
   loadingWeeks: Set<string>
 }) {
-  const level = isSchedule ? rowLevel(row) : 0
+  const level = hierarchical ? rowLevel(row, rows) : 0
   const group = row.kind !== 'tech'
-  const topGroup = isSchedule && group && level === 0
-  const colors = isSchedule ? stripColors(row) : []
-  const canToggle = isSchedule && rowHasChildren(row.id)
+  const topGroup = hierarchical && group && level === 0
+  const colors = hierarchical ? stripColors(row, rows) : []
+  const canToggle = hierarchical && rowHasChildren(row.id, rows)
   return (
     <div
       className={`prod-row${group ? ' is-group' : ''}${topGroup ? ' is-top' : ''}`}
@@ -1315,7 +1389,7 @@ function DataRow({
             <button type="button" className="prod-chevron" onClick={onToggle} aria-label={collapsed ? 'Expand' : 'Collapse'}>
               <Icon svg={collapsed ? ChevronRightIcon : ExpandMoreIcon} size="small" inherit />
             </button>
-          ) : isSchedule ? (
+          ) : hierarchical ? (
             <span className="prod-chevron-spacer" />
           ) : null}
           {!isSchedule && row.initials ? <Avatar name={row.name} size="small" /> : null}
@@ -1341,7 +1415,7 @@ function DataRow({
           const x = event.clientX - rect.left
           const hit = bars.find((bar) => {
             if (bar.readOnly) return false
-            const box = barBox(bar.start, bar.end, minIndex, colW, canvasCols)
+            const box = barBox(bar.start, bar.end, minIndex, colW, canvasCols, zoom)
             return Boolean(box && x >= box.left && x <= box.left + box.width)
           })
           if (hit) onDragStart(event, hit, 'move')
@@ -1363,6 +1437,7 @@ function DataRow({
           <BarView
             key={bar.id}
             bar={bar}
+            zoom={zoom}
             colW={colW}
             minIndex={minIndex}
             colCount={canvasCols}
@@ -1382,6 +1457,7 @@ function DataRow({
 
 function BarView({
   bar,
+  zoom,
   colW,
   minIndex,
   colCount,
@@ -1394,6 +1470,7 @@ function BarView({
   onDragStart,
 }: {
   bar: ProdBar
+  zoom: Zoom
   colW: number
   minIndex: number
   colCount: number
@@ -1405,7 +1482,7 @@ function BarView({
   onBarClick: (id: string, iso: string, mods?: ClickMods) => void
   onDragStart: (event: ReactPointerEvent, bar: ProdBar, mode: DragMode) => void
 }) {
-  const box = barBox(bar.start, bar.end, minIndex, colW, colCount)
+  const box = barBox(bar.start, bar.end, minIndex, colW, colCount, zoom)
   if (!box) return null
   const days = barDays(bar)
   const selectedDays = days.filter((iso) => selected.has(cellId(bar.id, iso)))
@@ -1418,71 +1495,70 @@ function BarView({
   const shiftPx = clipped ? Math.min(Math.max(0, viewLeft - leftPx), Math.max(0, widthPx - 12)) : 0
   const ink = isDarkColor(bar.color) ? '#fff' : '#040404'
   const detail = bar.notes || bar.detail
-  const visEnd = box.visStart + Math.round(box.width / colW) - 1
+  const hatchW = zoom === 'days' ? colW : Math.max(4, colW / 7)
   return (
     <div
-      className={`prod-bar${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${allSelected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
-      style={
-        {
-          left: leftPx,
-          width: widthPx,
-          background: bar.color,
-          borderRadius: BAR_RADIUS,
-          color: ink,
-          '--prod-label-shift': `${shiftPx}px`,
-          clipPath: barClipPath(leftPx, widthPx, viewLeft, 1e9),
-        } as CSSProperties
-      }
-      draggable={false}
-      onDragStart={(event) => event.preventDefault()}
-      onClick={(event) => {
-        event.stopPropagation()
-        if (bar.readOnly) return
-        const rect = event.currentTarget.getBoundingClientRect()
-        const wholeBar = event.detail >= 2 || event.clientY - rect.top <= 8
-        onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
-          shiftKey: event.shiftKey,
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          wholeBar,
-        })
-      }}
-      onDoubleClick={(event) => {
-        event.stopPropagation()
-        if (bar.readOnly) return
-        onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
-          shiftKey: event.shiftKey,
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          wholeBar: true,
-        })
-      }}
-      onPointerDown={(event) => onDragStart(event, bar, 'move')}
+      className={`prod-bar-wrap${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${allSelected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
+      style={{ left: leftPx, width: widthPx }}
     >
-      {!bar.thin ? (
-        <span className="prod-bar-label">
-          <span className="prod-bar-title">{timeLine(bar)}</span>
-          {detail ? <span className="prod-bar-detail">{detail}</span> : null}
-        </span>
-      ) : null}
-      {hatches.map((iso) => {
-        const idx = columnIndexAt('days', utc(iso))
-        if (idx < box.visStart || idx > visEnd) return null
-        return <span key={iso} className="prod-bar-hatch" style={{ left: (idx - box.visStart) * colW - 2, width: colW }} />
-      })}
-      {!allSelected
-        ? selectedDays.map((iso) => {
-            const idx = columnIndexAt('days', utc(iso))
-            if (idx < box.visStart || idx > visEnd) return null
-            return (
-              <span
-                key={`sel-${iso}`}
-                className="prod-bar-cell is-on"
-                style={{ left: (idx - box.visStart) * colW - 2, width: colW }}
-              />
-            )
+      {allSelected ? <span className="prod-bar-select-ring" aria-hidden /> : null}
+      <div
+        className={`prod-bar${bar.thin ? ' is-thin' : ''}${detail && !bar.thin ? ' is-rc' : ''}${bar.readOnly ? ' is-readonly' : ''}${allSelected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
+        style={
+          {
+            background: bar.color,
+            borderRadius: BAR_RADIUS,
+            color: ink,
+            '--prod-label-shift': `${shiftPx}px`,
+            clipPath: barClipPath(leftPx, widthPx, viewLeft, 1e9),
+          } as CSSProperties
+        }
+        draggable={false}
+        onDragStart={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.stopPropagation()
+          if (bar.readOnly) return
+          const rect = event.currentTarget.getBoundingClientRect()
+          const wholeBar = zoom !== 'days' || event.detail >= 2 || event.clientY - rect.top <= 8
+          onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
+            shiftKey: event.shiftKey,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            wholeBar,
           })
-        : null}
+        }}
+        onDoubleClick={(event) => {
+          event.stopPropagation()
+          if (bar.readOnly) return
+          onBarClick(bar.id, clampIso(dateAtClientX(event.clientX), bar.start, bar.end), {
+            shiftKey: event.shiftKey,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            wholeBar: true,
+          })
+        }}
+        onPointerDown={(event) => onDragStart(event, bar, 'move')}
+      >
+        {!bar.thin ? (
+          <span className="prod-bar-label">
+            <span className="prod-bar-title">{timeLine(bar)}</span>
+            {detail ? <span className="prod-bar-detail">{detail}</span> : null}
+          </span>
+        ) : null}
+        {hatches.map((iso) => {
+          const x = worldXForDate(zoom, minIndex, colW, iso)
+          if (x + hatchW < leftPx || x > leftPx + widthPx) return null
+          return <span key={iso} className="prod-bar-hatch" style={{ left: x - leftPx, width: hatchW }} />
+        })}
+        {!allSelected
+          ? selectedDays.map((iso) => {
+              const x = worldXForDate(zoom, minIndex, colW, iso)
+              const w = zoom === 'days' ? colW : hatchW
+              if (x + w < leftPx || x > leftPx + widthPx) return null
+              return <span key={`sel-${iso}`} className="prod-bar-cell is-on" style={{ left: x - leftPx, width: w }} />
+            })
+          : null}
+      </div>
       {!bar.readOnly ? (
         <>
           <span

@@ -1,10 +1,9 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
-import { addDays, DAY_MS, utc, type TimeWindow } from './timeline'
+import type { Zoom } from './data'
+import { DAY_VIEW_DAYS, addExtendBuffer, extendBoundsAfterDrop, type ExtendEdge } from './interaction'
+import { addDays, utc, type TimeWindow } from './timeline'
 
-export type ScrollDemoMode = 'infinite' | 'extend'
-
-/** Days added past a dropped bar’s end in Version B. From Jade’s verbal note, not Smartsheet docs. */
-export const EXTEND_ON_DROP_DAYS = 10
+export type ScrollDemoMode = 'clip' | 'extend'
 
 type ScrollDemoValue = {
   mode: ScrollDemoMode
@@ -14,7 +13,7 @@ type ScrollDemoValue = {
 const ScrollDemoContext = createContext<ScrollDemoValue | null>(null)
 
 export function ScrollDemoProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<ScrollDemoMode>('infinite')
+  const [mode, setMode] = useState<ScrollDemoMode>('extend')
   const value = useMemo(() => ({ mode, setMode }), [mode])
   return <ScrollDemoContext.Provider value={value}>{children}</ScrollDemoContext.Provider>
 }
@@ -37,7 +36,7 @@ export function spanBounds(items: { start: string; end: string }[]) {
 }
 
 /** Union of the opening visible range and the placeholder data span. */
-export function initialExtendBounds(todayIso: string, items: { start: string; end: string }[], visibleDays = 14) {
+export function initialExtendBounds(todayIso: string, items: { start: string; end: string }[], visibleDays = DAY_VIEW_DAYS) {
   const data = spanBounds(items)
   const viewEnd = addDays(todayIso, visibleDays - 1)
   const start = data && data.start < todayIso ? data.start : todayIso
@@ -45,16 +44,26 @@ export function initialExtendBounds(todayIso: string, items: { start: string; en
   return { start, end }
 }
 
-export function shouldExtendOnDrop(barEndIso: string, timelineEndIso: string, viewWindow: TimeWindow) {
-  const barEnd = utc(barEndIso) + DAY_MS
-  const timelineEnd = utc(timelineEndIso) + DAY_MS
-  const visible = Math.max(DAY_MS, viewWindow.end - viewWindow.start)
-  return barEnd >= timelineEnd || utc(barEndIso) >= timelineEnd - visible
+export function growBoundToward(iso: string, prevIso: string, edge: ExtendEdge) {
+  if (edge === 'end') return utc(iso) > utc(prevIso) ? iso : prevIso
+  return utc(iso) < utc(prevIso) ? iso : prevIso
 }
 
-export function extendEndAfterDrop(barEndIso: string, timelineEndIso: string, viewWindow: TimeWindow) {
-  if (!shouldExtendOnDrop(barEndIso, timelineEndIso, viewWindow)) return timelineEndIso
-  const next = addDays(barEndIso, EXTEND_ON_DROP_DAYS)
+export function applyExtendOnDrop(
+  barStartIso: string,
+  barEndIso: string,
+  boundStartIso: string,
+  boundEndIso: string,
+  zoom: Zoom,
+  viewWindow: TimeWindow,
+  hitEdge: ExtendEdge | null,
+) {
+  return extendBoundsAfterDrop(barStartIso, barEndIso, boundStartIso, boundEndIso, zoom, viewWindow, hitEdge)
+}
+
+/** @deprecated Use applyExtendOnDrop. Kept so older call sites typecheck during the swap. */
+export function extendEndAfterDrop(barEndIso: string, timelineEndIso: string, _viewWindow: TimeWindow) {
+  const next = addExtendBuffer(barEndIso, 'days', 1)
   return utc(next) > utc(timelineEndIso) ? next : timelineEndIso
 }
 
@@ -71,14 +80,14 @@ export function PrototypeScrollSwitch() {
   return (
     <aside className="proto-scroll-switch" aria-label="Prototype scroll comparison">
       <span className="proto-tag">Prototype</span>
-      <p className="proto-scroll-kicker">Compare drag-scroll versions. Not a product setting.</p>
+      <p className="proto-scroll-kicker">Infinite scroll is dropped. Extend-on-drop is locked. Not a product setting.</p>
       <button
         type="button"
-        className={`proto-scroll-option${mode === 'infinite' ? ' is-on' : ''}`}
-        aria-pressed={mode === 'infinite'}
-        onClick={() => setMode('infinite')}
+        className={`proto-scroll-option${mode === 'clip' ? ' is-on' : ''}`}
+        aria-pressed={mode === 'clip'}
+        onClick={() => setMode('clip')}
       >
-        Version A: infinite scroll
+        Stop at edge
       </button>
       <button
         type="button"
@@ -86,7 +95,7 @@ export function PrototypeScrollSwitch() {
         aria-pressed={mode === 'extend'}
         onClick={() => setMode('extend')}
       >
-        Version B: extend on drop
+        Extend on drop
       </button>
     </aside>
   )

@@ -64,27 +64,32 @@ export const calendarRows: ProdRow[] = [
   { id: 'karen', kind: 'tech', name: 'Karen Filippelli', initials: 'KF', role: 'Technician' },
 ]
 
-function byId(id: string) {
-  return scheduleRows.find((row) => row.id === id)
+export const calendarProjectRows: ProdRow[] = [
+  { id: 'summit', kind: 'project', name: 'Project Summit', color: RC_CYAN },
+  ...calendarRows.map((row) => ({ ...row, parentId: 'summit' })),
+]
+
+function byId(id: string, rows: ProdRow[] = scheduleRows) {
+  return rows.find((row) => row.id === id)
 }
 
-export function rowLevel(row: ProdRow) {
+export function rowLevel(row: ProdRow, rows: ProdRow[] = scheduleRows) {
   let n = 0
-  let parent = row.parentId ? byId(row.parentId) : undefined
+  let parent = row.parentId ? byId(row.parentId, rows) : undefined
   while (parent) {
     n += 1
-    parent = parent.parentId ? byId(parent.parentId) : undefined
+    parent = parent.parentId ? byId(parent.parentId, rows) : undefined
   }
   return n
 }
 
-export function stripColors(row: ProdRow) {
+export function stripColors(row: ProdRow, rows: ProdRow[] = scheduleRows) {
   const colors: string[] = []
   let cur: ProdRow | undefined = row
   const stack: ProdRow[] = []
   while (cur) {
     stack.unshift(cur)
-    cur = cur.parentId ? byId(cur.parentId) : undefined
+    cur = cur.parentId ? byId(cur.parentId, rows) : undefined
   }
   for (const item of stack) {
     if (item.kind !== 'tech' && item.color) colors.push(item.color)
@@ -92,11 +97,11 @@ export function stripColors(row: ProdRow) {
   return colors
 }
 
-export function groupColorForRow(rowId: string) {
-  let cur = byId(rowId)
+export function groupColorForRow(rowId: string, rows: ProdRow[] = scheduleRows) {
+  let cur = byId(rowId, rows)
   while (cur) {
     if (cur.color) return cur.color
-    cur = cur.parentId ? byId(cur.parentId) : undefined
+    cur = cur.parentId ? byId(cur.parentId, rows) : undefined
   }
   return DEFAULT_GANTT
 }
@@ -107,15 +112,15 @@ export function firstLevelGroupIds() {
     .map((row) => row.id)
 }
 
-export function rowHasChildren(id: string) {
-  return scheduleRows.some((row) => row.parentId === id)
+export function rowHasChildren(id: string, rows: ProdRow[] = scheduleRows) {
+  return rows.some((row) => row.parentId === id)
 }
 
-export function rowHidden(row: ProdRow, collapsed: Set<string>) {
-  let parent = row.parentId ? byId(row.parentId) : undefined
+export function rowHidden(row: ProdRow, collapsed: Set<string>, rows: ProdRow[] = scheduleRows) {
+  let parent = row.parentId ? byId(row.parentId, rows) : undefined
   while (parent) {
     if (collapsed.has(parent.id)) return true
-    parent = parent.parentId ? byId(parent.parentId) : undefined
+    parent = parent.parentId ? byId(parent.parentId, rows) : undefined
   }
   return false
 }
@@ -166,6 +171,16 @@ export const initialScheduleBars: ProdBar[] = [
 ]
 
 export const initialCalendarBars: ProdBar[] = [
+  {
+    id: 'rc-summit',
+    rowId: 'summit',
+    start: '2026-10-12',
+    end: '2026-10-30',
+    title: 'Project Summit',
+    color: RC_CYAN,
+    readOnly: true,
+    thin: true,
+  },
   {
     id: 'rc-creed',
     rowId: 'creed',
