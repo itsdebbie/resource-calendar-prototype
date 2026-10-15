@@ -43,6 +43,7 @@ import {
 import { useTimelineScroll } from '../useTimelineScroll'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
+import { barClipPath, extendEndAfterDrop, initialExtendBounds, useScrollDemo } from '../scrollDemo'
 import {
   CalendarIcon,
   ChevronRightIcon,
@@ -57,8 +58,6 @@ import {
 import {
   BAR_RADIUS,
   calendarRows,
-  EDGE_DELAY_MS,
-  EDGE_ZONE,
   firstLevelGroupIds,
   groupColorForRow,
   initialCalendarBars,
@@ -100,7 +99,6 @@ const MONTHS_LONG = [
   'November',
   'December',
 ]
-const SCROLL_PX = 8
 const FIRST_LEVEL_IDS = firstLevelGroupIds()
 
 function resizeStart(span: Span, next: string): Span {
@@ -293,10 +291,21 @@ function ProdGrid({ view }: { view: ProdView }) {
   const ignoreClick = useRef(false)
   const selectAnchor = useRef<string | null>(null)
   const dragCellsRef = useRef<string[]>([])
-  const edgeDir = useRef(0)
-  const edgeSince = useRef(0)
-  const timeline = useTimelineScroll('days', scrollRef, { gutter, initialIso: PROD_TODAY })
-  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, scrollBy, firstVisible, scrollLeft, viewWindow, visibleCount } =
+  const { mode: scrollMode } = useScrollDemo()
+  const seedBars = isSchedule ? initialScheduleBars : initialCalendarBars
+  const seedBounds = useMemo(() => initialExtendBounds(PROD_TODAY, seedBars), [seedBars])
+  const [boundEnd, setBoundEnd] = useState(seedBounds.end)
+  useEffect(() => {
+    if (scrollMode === 'extend') setBoundEnd(seedBounds.end)
+  }, [scrollMode, seedBounds.end])
+  const timeline = useTimelineScroll('days', scrollRef, {
+    gutter,
+    initialIso: PROD_TODAY,
+    mode: scrollMode,
+    boundStartIso: scrollMode === 'extend' ? seedBounds.start : undefined,
+    boundEndIso: scrollMode === 'extend' ? boundEnd : undefined,
+  })
+  const { columns, colW, canvasWidth, dateAtClientX, jumpTo, firstVisible, scrollLeft, viewWindow, visibleCount, autoScrollFromPointer } =
     timeline
   const visColumns = useMemo(
     () => sliceVisibleColumns(columns, firstVisible, visibleCount, columnRenderBuffer('days')),
@@ -357,8 +366,8 @@ function ProdGrid({ view }: { view: ProdView }) {
   }, [])
   const dateAtClientXRef = useRef(dateAtClientX)
   dateAtClientXRef.current = dateAtClientX
-  const scrollByRef = useRef(scrollBy)
-  scrollByRef.current = scrollBy
+  const autoScrollRef = useRef(autoScrollFromPointer)
+  autoScrollRef.current = autoScrollFromPointer
   const minIndex = columns[0]?.index ?? 0
   const firstIso = columns.find((c) => c.index === firstVisible)?.id ?? PROD_TODAY
 
@@ -444,11 +453,6 @@ function ProdGrid({ view }: { view: ProdView }) {
   const selectedCount = selected.size
   const selectedScheduleCount = selectedBars.length
 
-  const stopEdge = useCallback(() => {
-    edgeDir.current = 0
-    edgeSince.current = 0
-  }, [])
-
   const applyDrag = useCallback(
     (clientX: number, clientY: number) => {
       const drag = dragRef.current
@@ -524,13 +528,16 @@ function ProdGrid({ view }: { view: ProdView }) {
 
   const endDrag = useCallback(() => {
     const drag = dragRef.current
-    stopEdge()
     setDragHint(null)
     setDraggingId(null)
     document.body.classList.remove('prod-grabbing')
     if (!drag) return
     dragRef.current = null
     if (!drag.moved) return
+    if (scrollMode === 'extend') {
+      const bar = barsRef.current.find((item) => item.id === drag.id)
+      if (bar) setBoundEnd((prev) => extendEndAfterDrop(bar.end, prev, viewWindow))
+    }
     const before = undoRef.current
     undoRef.current = null
     if (drag.mode === 'move' && isSchedule) {
@@ -558,7 +565,7 @@ function ProdGrid({ view }: { view: ProdView }) {
         },
       })
     }, 0)
-  }, [isSchedule, stopEdge])
+  }, [isSchedule, scrollMode, viewWindow, setBarsUser])
 
   useEffect(() => {
     const onMove = (event: PointerEvent | MouseEvent) => {
@@ -587,28 +594,15 @@ function ProdGrid({ view }: { view: ProdView }) {
     let raf = 0
     const tick = () => {
       const drag = dragRef.current
-      const el = scrollRef.current
-      if (drag && el) {
-        const rect = el.getBoundingClientRect()
-        const x = drag.lastX
-        let dir = 0
-        if (x >= rect.right - EDGE_ZONE) dir = 1
-        else if (x <= rect.left + gutter + EDGE_ZONE) dir = -1
-        const now = performance.now()
-        if (dir !== edgeDir.current) {
-          edgeDir.current = dir
-          edgeSince.current = dir ? now : 0
-        }
-        if (dir && edgeSince.current && now - edgeSince.current >= EDGE_DELAY_MS) {
-          scrollByRef.current(dir * SCROLL_PX)
-        }
+      if (drag) {
+        autoScrollRef.current(drag.lastX)
         applyDragRef.current(drag.lastX, drag.lastY)
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [draggingId, gutter])
+  }, [draggingId])
 
   function startDrag(event: ReactPointerEvent, bar: ProdBar, mode: DragMode) {
     if (bar.readOnly) return
@@ -1436,6 +1430,7 @@ function BarView({
           borderRadius: BAR_RADIUS,
           color: ink,
           '--prod-label-shift': `${shiftPx}px`,
+          clipPath: barClipPath(leftPx, widthPx, viewLeft, 1e9),
         } as CSSProperties
       }
       draggable={false}

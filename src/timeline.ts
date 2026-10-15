@@ -23,7 +23,19 @@ export const DAY_MS = 86400000
 export const BUFFER_COLS = 40
 /** Extra day/week/month columns rendered on each side of the viewport. */
 export const COLUMN_RENDER_BUFFER = 7
-export const EDGE_PX = 56
+/**
+ * Drag auto-scroll zone width in px. Unvalidated prototype guess — see README.
+ * @see EDGE_SCROLL_MIN_PX
+ */
+export const EDGE_SCROLL_ZONE_PX = 56
+/** @deprecated Use EDGE_SCROLL_ZONE_PX. Kept as the hook’s existing name. */
+export const EDGE_PX = EDGE_SCROLL_ZONE_PX
+/** Slowest auto-scroll step while the pointer is just inside the zone. Unvalidated. */
+export const EDGE_SCROLL_MIN_PX = 12
+/** Fastest auto-scroll step at the outer edge. Unvalidated. */
+export const EDGE_SCROLL_MAX_PX = 36
+/** Distance-to-speed divisor for auto-scroll. Unvalidated. */
+export const EDGE_SCROLL_GAIN = 3
 export const ZOOM_ORDER: Zoom[] = ['days', 'weeks', 'months', 'quarters', 'year']
 /** 0 = Sunday. Later this can follow a company first-day-of-week setting. */
 export const WEEK_START_DAY = 0
