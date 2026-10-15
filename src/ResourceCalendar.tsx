@@ -1400,11 +1400,9 @@ function RcGridRow({
       .filter((row) => row.personId === personId)
       .map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
     const meta =
-      personId === 'unassigned'
-        ? { text: 'Needs a tech', detail: rows.map((r) => r.label).join(' + '), over: false }
-        : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
+      personId === 'unassigned' ? null : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
     return (
-      <div className={`rc-row is-group is-packed${meta.over ? ' is-capacity' : ''}`}>
+      <div className={`rc-row is-group is-packed${meta?.over ? ' is-capacity' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={() => onToggle(personId)} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
@@ -1418,7 +1416,13 @@ function RcGridRow({
           )}
           <div className="rc-gutter-copy">
             <Name>{person?.name ?? 'Unassigned'}</Name>
-            <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
+            {meta ? (
+              <HoursMeta scheduled={meta.booked} actual={meta.actual} over={meta.over} detail={meta.detail} />
+            ) : (
+              <Text size="small" subdued>
+                Needs a tech
+              </Text>
+            )}
           </div>
         </div>
         <PackedPersonBars rows={rows} personId={personId} showLabels={!open} />
@@ -1445,15 +1449,29 @@ function RcGridRow({
   )
 }
 
-function HoursMeta({ text, detail, warn }: { text: string; detail?: string; warn?: boolean }) {
+function HoursMeta({
+  scheduled,
+  actual,
+  over,
+  detail,
+}: {
+  scheduled: number
+  actual: number
+  over: boolean
+  detail?: string
+}) {
+  const label = `Scheduled ${scheduled}h / Actual ${actual}h`
   return (
     <Tooltip openOnHover>
       <Tooltip.Trigger>
-        <Text size="small" className={`rc-truncate${warn ? ' rc-hours-warn' : ''}`} subdued={!warn}>
-          {text}
-        </Text>
+        <span className={`rc-hours rc-truncate${over ? ' rc-hours-warn' : ''}`}>
+          {over ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
+          <Text size="small" subdued={!over} className={over ? 'rc-hours-warn' : undefined}>
+            {label}
+          </Text>
+        </span>
       </Tooltip.Trigger>
-      <Tooltip.Content>{detail || text}</Tooltip.Content>
+      <Tooltip.Content>{detail || label}</Tooltip.Content>
     </Tooltip>
   )
 }
@@ -1505,7 +1523,7 @@ function PersonAssignmentRow({
         <Avatar name={person.name} size="small" color={person.color} />
         <div className="rc-gutter-copy">
           <Name>{person.name}</Name>
-          <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
+          <HoursMeta scheduled={meta.booked} actual={meta.actual} over={meta.over} detail={meta.detail} />
         </div>
       </div>
       <PackedPersonBars rows={rows} personId={personId} showLabels />

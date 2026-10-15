@@ -13,6 +13,11 @@ Interactive Anvil2 prototype of the signed-off Group by Projects resource calend
 
 - **Prod + scroll** (`#/prod/schedule` and `#/prod/calendar`): production styling, two weeks in view, infinite horizontal scroll, Today + a single date picker (no prev/next or range field), move and resize with edge auto-scroll, a live date tooltip, snap-to-day, undo toast, and the edit flyout.
 
+## Decisions and assumptions
+
+- **Technician rows (Jade, 12 Oct 2026):** per-tech rows in the redesign left panel show scheduled and actual hours only. No budget on tech rows — budget stays on project/phase rows (e.g. a change order with 20 total hours). Overbooking is **scheduled hours over that tech’s available hours**, shown with the existing red conflict treatment (danger color, warning icon, row tint).
+- **Actual over scheduled (open question for Jade):** the left panel shows both numbers when they differ (e.g. `Scheduled 8h / Actual 10h`) but does not flag that case. Whether to treat actual over scheduled as a conflict is still open.
+
 ```bash
 npm install
 npm run dev

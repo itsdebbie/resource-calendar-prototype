@@ -600,7 +600,7 @@
 }
 
 .rc-row.is-capacity .rc-gutter {
-  background: var(--a2-background-color-warning-faint, #fffef8);
+  background: var(--a2-background-color-danger-faint, #fffbfa);
 }
 
 .rc-chevron {
@@ -897,7 +897,7 @@ body.rc-grabbing {
 }
 
 .rc-hours-warn {
-  color: var(--a2-color-yellow-700, #c98600);
+  color: var(--rc-danger);
 }
 
 .rc-nested .rc-gutter {
