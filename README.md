@@ -10,6 +10,7 @@ Interactive Anvil2 prototype of the signed-off Group by Projects resource calend
 - Short bars that share a week merge into an **N bookings · Xh** chip at Month zoom and finer. Quarter and Year short bars are color only.
 - Weekends are off by default in Week and coarser zooms. The hatch always shows in Day, or when **Show Weekends** is on.
 - Editing is Day and Week only. Month, Quarter, and Year are read-only: click a bar for a popover and **Edit in Week view**. ⌘/Ctrl-click adds to the selection; Shift-click selects a range.
+- **Edge auto-scroll** (`autoScrollFromPointer` in `useTimelineScroll`): while moving or resizing a bar in an editable view, holding the pointer in the left/right edge of the timeline scrolls continuously that way. Speed ramps closer to the edge (`EDGE_SCROLL_ZONE_PX = 56`, `EDGE_SCROLL_MIN_PX = 12`, `EDGE_SCROLL_MAX_PX = 36`, `EDGE_SCROLL_GAIN = 3`). The dragged bar stays under the pointer, the live drop-date label updates, and week chunks load as the window moves (skeleton where not loaded). No end cap. Drop snaps to day. Same behavior on `#/` (Day and Week), `#/prod/schedule`, and `#/prod/calendar`.
 
 - **Prod + scroll** (`#/prod/schedule` and `#/prod/calendar`): production styling, two weeks in view, infinite horizontal scroll, Today + a single date picker (no prev/next or range field), move and resize with edge auto-scroll, a live date tooltip, snap-to-day, undo toast, and the edit flyout.
 

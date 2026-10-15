@@ -1003,7 +1003,7 @@ export function ResourceCalendar() {
         </Flex>
       </Card>
 
-      {zoom === 'weeks' && dragHint ? (
+      {dragHint ? (
         <div className="rc-drag-tip" style={{ left: dragHint.x, top: dragHint.y }}>
           {dragHint.label}
         </div>
