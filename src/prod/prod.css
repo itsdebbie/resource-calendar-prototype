@@ -22,6 +22,10 @@
 }
 
 .prod-page {
+  --rc-duration: var(--a2-duration-default, 200ms);
+  --rc-duration-fast: var(--a2-duration-fast, 100ms);
+  /* ASSUMPTION: Anvil 2 has no easing tokens. CSS ease-out. */
+  --rc-easing: ease-out;
   flex: 1;
   min-height: 0;
   height: 100%;
@@ -99,6 +103,7 @@
 .prod-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-height: 36px;
 }
@@ -396,12 +401,14 @@
   font-weight: 700;
   line-height: 1.2;
   min-width: 22px;
-  height: 22px;
+  min-height: 22px;
+  height: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 5px;
   box-sizing: border-box;
+  text-align: center;
 }
 
 .prod-day-num.is-today {
@@ -430,6 +437,45 @@
 .prod-page.is-schedule .prod-person {
   flex-direction: row;
   align-items: center;
+}
+
+.prod-bar-wrap {
+  position: absolute;
+  top: 6px;
+  height: 38px;
+  z-index: 2;
+}
+
+.prod-bar-wrap:not(.is-dragging) {
+  transition: left var(--rc-duration-fast) var(--rc-easing), width var(--rc-duration-fast) var(--rc-easing);
+}
+
+.prod-bar-wrap.is-thin {
+  top: 20px;
+  height: 10px;
+}
+
+.prod-bar-wrap.is-rc {
+  top: 6px;
+  height: 38px;
+}
+
+.prod-bar-wrap .prod-bar {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  left: auto;
+  top: 0;
+  height: 100%;
+}
+
+.prod-bar-select-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 9px;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--a2-status-color-info, #0265dc);
+  pointer-events: none;
+  z-index: 4;
 }
 
 .prod-bar {
@@ -465,13 +511,19 @@
   cursor: default;
 }
 
+.prod-bar-wrap .prod-bar,
+.prod-bar-wrap .prod-bar.is-thin,
+.prod-bar-wrap .prod-bar.is-rc {
+  top: 0;
+  height: 100%;
+}
+
 .prod-bar.is-readonly {
   cursor: default;
 }
 
 .prod-bar.is-selected {
-  outline: 2px solid #141414;
-  outline-offset: 1px;
+  outline: none;
 }
 
 .prod-bar-cell {
@@ -537,10 +589,12 @@
 .prod-handle {
   position: absolute;
   top: 0;
-  width: 10px;
+  width: 12px;
   height: 100%;
   cursor: ew-resize;
-  z-index: 3;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity var(--rc-duration) var(--rc-easing);
 }
 
 .prod-handle.is-start {
@@ -549,6 +603,12 @@
 
 .prod-handle.is-end {
   right: 0;
+}
+
+.prod-bar-wrap:hover .prod-handle,
+.prod-bar-wrap.is-selected .prod-handle,
+.prod-bar-wrap.is-dragging .prod-handle {
+  opacity: 1;
 }
 
 .prod-drag-tip {

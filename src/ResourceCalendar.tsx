@@ -7,13 +7,13 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type HTMLAttributes,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
 import {
   Avatar,
   Button,
-  Calendar,
   Card,
   Chip,
   Dialog,
@@ -64,12 +64,9 @@ import {
   SHORT_BAR_PX,
   addDays,
   barPixelBox,
-  calendarStartDay,
   columnAtIndex,
   columnRenderBuffer,
   isoFromTs,
-  MONTH_LABELS,
-  PICKER_LABEL_SIZER,
   pickerAnchorStart,
   pickerLabel,
   activeSegments,
@@ -88,14 +85,11 @@ import {
   packLanes,
   periodPinLabel,
   resizeSpanEnd,
+  resizeSpanStart,
   segmentIsSliver,
   shiftSpan,
   sliceVisibleColumns,
-  startOfMonth,
-  startOfQuarter,
-  startOfYear,
   todayMarkerX,
-  utc,
   mondayOf,
   weekIndexOf,
   weekendSlices,
@@ -107,7 +101,9 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
-import { barClipPath, extendEndAfterDrop, initialExtendBounds, useScrollDemo } from './scrollDemo'
+import { DateJumpPicker } from './DateJumpPicker'
+import { applyExtendOnDrop, barClipPath, growBoundToward, initialExtendBounds, useScrollDemo } from './scrollDemo'
+import { snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
 import {
   columnWeekLoading,
@@ -120,7 +116,6 @@ import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
 import { CrewPanel } from './CrewPanel'
 import {
   CalendarCheckIcon,
-  CalendarIcon,
   DeleteIcon,
   EditIcon,
   ExpandMoreIcon,
@@ -130,7 +125,7 @@ import {
 import './calendar.css'
 
 type Selection = string
-type DragMode = 'move' | 'resize' | 'day'
+type DragMode = 'move' | 'resize' | 'resize-start' | 'day'
 type DragState = {
   mode: DragMode
   ids: string[]
@@ -158,11 +153,6 @@ function isTextEntryTarget(target: EventTarget | null) {
   if (target instanceof HTMLElement && target.isContentEditable) return true
   if (!(target instanceof HTMLInputElement)) return false
   return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
-}
-
-function toDayIso(value: string) {
-  const iso = value.slice(0, 10)
-  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : ''
 }
 
 function readCrewOpen() {
@@ -318,19 +308,38 @@ export function ResourceCalendar() {
     () => initialExtendBounds(DEMO_TODAY, [...assignments, ...projects, ...phases]),
     [],
   )
+  const [boundStart, setBoundStart] = useState(seedBounds.start)
   const [boundEnd, setBoundEnd] = useState(seedBounds.end)
+  const dropStartRef = useRef<string | null>(null)
   const dropEndRef = useRef<string | null>(null)
+  const hitEdgeRef = useRef<ExtendEdge | null>(null)
   useEffect(() => {
-    if (scrollMode === 'extend') setBoundEnd(seedBounds.end)
-  }, [scrollMode, seedBounds.end])
+    setBoundStart(seedBounds.start)
+    setBoundEnd(seedBounds.end)
+    hitEdgeRef.current = null
+  }, [scrollMode, seedBounds.start, seedBounds.end])
+  const onNeedBound = useCallback((edge: ExtendEdge, iso: string) => {
+    hitEdgeRef.current = edge
+    if (edge === 'end') setBoundEnd((prev) => growBoundToward(iso, prev, 'end'))
+    else setBoundStart((prev) => growBoundToward(iso, prev, 'start'))
+  }, [])
 
   const timeline = useTimelineScroll(zoom, scrollRef, {
     mode: scrollMode,
-    boundStartIso: scrollMode === 'extend' ? seedBounds.start : undefined,
-    boundEndIso: scrollMode === 'extend' ? boundEnd : undefined,
+    boundStartIso: boundStart,
+    boundEndIso: boundEnd,
+    onNeedBound,
   })
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
+  const viewWindowRef = useRef(viewWindow)
+  viewWindowRef.current = viewWindow
+  const boundStartRef = useRef(boundStart)
+  const boundEndRef = useRef(boundEnd)
+  boundStartRef.current = boundStart
+  boundEndRef.current = boundEnd
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, timeline.firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
   const pickerText = pickerLabel(zoom, pickerStart)
@@ -489,8 +498,11 @@ export function ResourceCalendar() {
       if (Math.abs(clientX - drag.originX) > 5) drag.moved = true
       if (!drag.moved) return
       autoScrollFromPointer(clientX)
-      const date = dateAtClientX(clientX)
-      const delta = diffDays(drag.originDate, date)
+      const raw = dateAtClientX(clientX)
+      const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize' ? 'end' : 'point'
+      const date = snapDragIso(zoom, raw, snapEdge)
+      const origin = snapDragIso(zoom, drag.originDate, 'point')
+      const delta = diffDays(origin, date)
       if (Math.abs(delta) > 0 || date !== drag.fromDay) drag.moved = true
       const next: Record<string, Span> = {}
       if (drag.mode === 'day') {
@@ -505,6 +517,12 @@ export function ResourceCalendar() {
         if (id && snap) {
           next[id] = resizeSpanEnd(snap, date)
         }
+      } else if (drag.mode === 'resize-start') {
+        const id = drag.ids[0]
+        const snap = id ? drag.snapshot[id] : undefined
+        if (id && snap) {
+          next[id] = resizeSpanStart(snap, date)
+        }
       } else {
         for (const id of drag.ids) {
           const snap = drag.snapshot[id]
@@ -518,7 +536,14 @@ export function ResourceCalendar() {
         const start = preview.reduce((min, span) => (span.start < min ? span.start : min), preview[0]!.start)
         const end = preview.reduce((max, span) => (span.end > max ? span.end : max), preview[0]!.end)
         const label =
-          drag.mode === 'move' ? formatMoveRange(start, end) : drag.mode === 'resize' ? formatDay(end) : formatDay(date)
+          drag.mode === 'move'
+            ? formatMoveRange(start, end)
+            : drag.mode === 'resize-start'
+              ? formatDay(start)
+              : drag.mode === 'resize'
+                ? formatDay(end)
+                : formatDay(date)
+        dropStartRef.current = start
         dropEndRef.current = end
         setDragHint({
           mode: drag.mode,
@@ -529,7 +554,7 @@ export function ResourceCalendar() {
         })
       }
     },
-    [autoScrollFromPointer, dateAtClientX],
+    [autoScrollFromPointer, dateAtClientX, zoom],
   )
 
   useEffect(() => {
@@ -549,11 +574,23 @@ export function ResourceCalendar() {
       document.body.classList.remove('rc-grabbing')
       if (drag.moved) {
         ignoreClick.current = true
-        if (scrollMode === 'extend' && dropEndRef.current) {
-          setBoundEnd((prev) => extendEndAfterDrop(dropEndRef.current!, prev, viewWindow))
+        if (scrollMode === 'extend' && dropStartRef.current && dropEndRef.current) {
+          const next = applyExtendOnDrop(
+            dropStartRef.current,
+            dropEndRef.current,
+            boundStartRef.current,
+            boundEndRef.current,
+            zoomRef.current,
+            viewWindowRef.current,
+            hitEdgeRef.current,
+          )
+          setBoundStart(next.start)
+          setBoundEnd(next.end)
         }
       }
+      dropStartRef.current = null
       dropEndRef.current = null
+      hitEdgeRef.current = null
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -561,7 +598,7 @@ export function ResourceCalendar() {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [applyDrag, scrollMode, viewWindow])
+  }, [applyDrag, scrollMode])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -1088,7 +1125,7 @@ export function ResourceCalendar() {
           <Flex direction="column" gap="3">
             <Text subdued>
               {isDayZoom(zoom)
-                ? 'Hours apply to the selected day. Switch to Week to move or resize the whole bar.'
+                ? 'Hours apply to the selected day. Week through Year move the whole bar.'
                 : 'Edits hours on the selected bar' + (selected.length === 1 ? '' : 's') + '. Month, Quarter, and Year are read-only.'}
             </Text>
             <TextField name="hours" label={isDayZoom(zoom) ? 'Hours this day' : 'Hours per day'} value={editHours} onChange={(e) => setEditHours(e.target.value)} />
@@ -1772,11 +1809,12 @@ function ShortChip({
             <div
               {...rest}
               ref={ref as never}
-              className="rc-chip-wrap"
+              className={`rc-chip-wrap${selectedNow ? ' is-selected' : ''}`}
               style={wrapStyle}
               onPointerEnter={tip.onPointerEnter}
               onPointerLeave={tip.onPointerLeave}
             >
+              {selectedNow ? <span className="rc-bar-select-ring" aria-hidden /> : null}
               <div
                 role="button"
                 tabIndex={-1}
@@ -1928,7 +1966,7 @@ function SpanBar({
   const visEnd = visColumns[visColumns.length - 1]?.end ?? columns[columns.length - 1]?.end ?? 0
   if (!dragIds.has(id) && !inTimeWindow(span.start, span.end, { start: visStart, end: visEnd })) return null
   const segs = activeSegments(span.start, span.end, span.offDays)
-  const wholeBar = zoom === 'weeks'
+  const wholeBar = zoom !== 'days'
   const hoursLine = hoursTooltipLine(scheduled, budget, actual, fallbackHours ?? hours)
   return (
     <>
@@ -1962,6 +2000,44 @@ function SpanBar({
         />
       ))}
     </>
+  )
+}
+
+function BarFrame({
+  selected,
+  dragging,
+  className,
+  style,
+  children,
+  handles,
+  innerRef,
+  ...rest
+}: {
+  selected?: boolean
+  dragging?: boolean
+  className: string
+  style: CSSProperties
+  children: ReactNode
+  handles?: ReactNode
+  innerRef?: { current: HTMLDivElement | null } | ((node: HTMLDivElement | null) => void)
+} & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className'>) {
+  const { clipPath, left, width, ...restStyle } = style
+  return (
+    <div
+      className={`rc-bar-wrap${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}`}
+      style={{ left, width, ['--rc-lane']: restStyle['--rc-lane'] } as CSSProperties}
+    >
+      {selected ? <span className="rc-bar-select-ring" aria-hidden /> : null}
+      <div
+        {...rest}
+        ref={innerRef as never}
+        className={className}
+        style={{ ...restStyle, clipPath, width: '100%', left: 0 }}
+      >
+        {children}
+      </div>
+      {handles}
+    </div>
   )
 }
 
@@ -2016,8 +2092,7 @@ function BarSegment({
   colorOnly?: boolean
   tipLines?: string[]
 }) {
-  const { clipLeft, viewPx, colW, onEditInWeek } = useGantt()
-  const [popOpen, setPopOpen] = useState(false)
+  const { clipLeft, viewPx, colW } = useGantt()
   const tip = useBarTip()
   const style = barStyle(seg.start, seg.end, columns)
   if (!style.visible) return null
@@ -2072,80 +2147,42 @@ function BarSegment({
           {hours ? (unassigned ? ` · ${hours}` : ` ${hours}`) : ''}
         </span>
       ) : null}
-      {editable && wholeBar && !colorOnly && !floatLabel ? (
+      <BarTip content={tooltip} open={tip.open && !dragging} pinX={tip.pinX} />
+    </>
+  )
+
+  const handles =
+    editable && !colorOnly && !floatLabel ? (
+      <>
         <span
-          className="rc-bar-handle"
+          className="rc-bar-handle is-start"
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            tip.hide()
+            onBarPointerDown(event, id, span, 'resize-start')
+          }}
+        />
+        <span
+          className="rc-bar-handle is-end"
           onPointerDown={(event) => {
             event.stopPropagation()
             tip.hide()
             onBarPointerDown(event, id, span, 'resize')
           }}
         />
-      ) : null}
-      <BarTip content={tooltip} open={tip.open && !popOpen && !dragging} pinX={tip.pinX} />
-    </>
-  )
-
-  if (!editable) {
-    return (
-      <Popover
-        placement="bottom"
-        onOpenAnimationStart={() => setPopOpen(true)}
-        onClose={() => setPopOpen(false)}
-      >
-        <Popover.Trigger>
-          {(props) => {
-            const { ref, onClick, ...rest } = props
-            return (
-                <div
-                  {...rest}
-                  ref={ref as never}
-                  role="button"
-                  tabIndex={-1}
-                  data-span={id}
-                  className={barClass}
-                  style={barStyleVars}
-                  onPointerEnter={tip.onPointerEnter}
-                  onPointerLeave={tip.onPointerLeave}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    tip.hide()
-                    onClick(event)
-                  }}
-                >
-                  {inner}
-                </div>
-            )
-          }}
-        </Popover.Trigger>
-        <Popover.Content>
-          <div className="rc-bar-pop">
-            {name ? <Text>{name}</Text> : null}
-            {tipLines?.slice(1).map((line) => (
-              <Text size="small" key={line}>
-                {line}
-              </Text>
-            ))}
-            {hoursLine && !tipLines ? <Text size="small">{hoursLine}</Text> : null}
-            <Text size="small" subdued>
-              {dates}
-            </Text>
-            <Button size="small" onClick={() => onEditInWeek(span)}>
-              Edit in Week view
-            </Button>
-          </div>
-        </Popover.Content>
-      </Popover>
-    )
-  }
+      </>
+    ) : null
 
   return (
-        <div
+        <BarFrame
+          selected={selectedNow}
+          dragging={dragging}
           role="button"
           tabIndex={-1}
           data-span={id}
           className={barClass}
           style={barStyleVars}
+          handles={handles}
           onPointerEnter={tip.onPointerEnter}
           onPointerLeave={tip.onPointerLeave}
           onClick={(event) => {
@@ -2165,195 +2202,6 @@ function BarSegment({
           }}
         >
           {inner}
-        </div>
-  )
-}
-
-function DateJumpPicker({
-  zoom,
-  value,
-  label,
-  onPick,
-}: {
-  zoom: Zoom
-  value: string
-  label: string
-  onPick: (iso: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onClose={() => setOpen(false)} placement="bottom-start" disableCaret>
-      <Popover.Trigger>
-        {(props) => (
-          <button
-            type="button"
-            className="rc-date-btn"
-            aria-label={label}
-            {...props}
-            onClick={() => setOpen((current) => !current)}
-          >
-            <Icon svg={CalendarIcon} size="small" inherit />
-            <span className="rc-date-label-wrap">
-              <span className="rc-date-sizer">{PICKER_LABEL_SIZER}</span>
-              <span className="rc-date-label">{label}</span>
-            </span>
-            <span className="rc-date-caret" aria-hidden>
-              ▾
-            </span>
-          </button>
-        )}
-      </Popover.Trigger>
-      <Popover.Content>
-        <div className="rc-date-pop">
-          {zoom === 'days' || zoom === 'weeks' ? (
-            <Calendar
-              key={zoom}
-              value={value}
-              defaultFocusedDate={value}
-              startDay={calendarStartDay()}
-              onSelection={({ value: next }) => {
-                if (typeof next !== 'string' || !next) return
-                const iso = toDayIso(next)
-                if (!iso) return
-                onPick(iso)
-                setOpen(false)
-              }}
-            />
-          ) : zoom === 'months' ? (
-            <MonthPicker
-              key={zoom}
-              value={value}
-              onPick={(iso) => {
-                onPick(iso)
-                setOpen(false)
-              }}
-            />
-          ) : zoom === 'quarters' ? (
-            <QuarterPicker
-              key={zoom}
-              value={value}
-              onPick={(iso) => {
-                onPick(iso)
-                setOpen(false)
-              }}
-            />
-          ) : (
-            <YearPicker
-              key={zoom}
-              value={value}
-              onPick={(iso) => {
-                onPick(iso)
-                setOpen(false)
-              }}
-            />
-          )}
-        </div>
-      </Popover.Content>
-    </Popover>
-  )
-}
-
-function MonthPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
-  const selected = new Date(utc(value))
-  const valueYear = selected.getUTCFullYear()
-  const [year, setYear] = useState(valueYear)
-  useEffect(() => {
-    setYear(valueYear)
-  }, [valueYear])
-  return (
-    <div className="rc-period-pop" data-picker-value={value} data-picker-year={year}>
-      <div className="rc-period-head">
-        <button type="button" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
-          ‹
-        </button>
-        <span>{year}</span>
-        <button type="button" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
-          ›
-        </button>
-      </div>
-      <div className="rc-period-grid is-months">
-        {MONTH_LABELS.map((name, month) => (
-          <button
-            key={name}
-            type="button"
-            className={year === selected.getUTCFullYear() && month === selected.getUTCMonth() ? 'is-on' : undefined}
-            onClick={() => onPick(startOfMonth(isoFromTs(Date.UTC(year, month, 1))))}
-          >
-            {name}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function QuarterPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
-  const selected = new Date(utc(value))
-  const selectedQ = Math.floor(selected.getUTCMonth() / 3)
-  const [year, setYear] = useState(selected.getUTCFullYear())
-  useEffect(() => {
-    setYear(new Date(utc(value)).getUTCFullYear())
-  }, [value])
-  return (
-    <div className="rc-period-pop">
-      <div className="rc-period-head">
-        <button type="button" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
-          ‹
-        </button>
-        <span>{year}</span>
-        <button type="button" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
-          ›
-        </button>
-      </div>
-      <div className="rc-period-grid is-quarters">
-        {[0, 1, 2, 3].map((q) => (
-          <button
-            key={q}
-            type="button"
-            className={year === selected.getUTCFullYear() && q === selectedQ ? 'is-on' : undefined}
-            onClick={() => onPick(startOfQuarter(isoFromTs(Date.UTC(year, q * 3, 1))))}
-          >
-            Q{q + 1}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function YearPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
-  const selectedYear = new Date(utc(value)).getUTCFullYear()
-  const [origin, setOrigin] = useState(Math.floor(selectedYear / 12) * 12)
-  useEffect(() => {
-    const y = new Date(utc(value)).getUTCFullYear()
-    setOrigin(Math.floor(y / 12) * 12)
-  }, [value])
-  const years = Array.from({ length: 12 }, (_, i) => origin + i)
-  return (
-    <div className="rc-period-pop">
-      <div className="rc-period-head">
-        <button type="button" onClick={() => setOrigin((y) => y - 12)} aria-label="Previous years">
-          ‹
-        </button>
-        <span>
-          {years[0]}–{years[years.length - 1]}
-        </span>
-        <button type="button" onClick={() => setOrigin((y) => y + 12)} aria-label="Next years">
-          ›
-        </button>
-      </div>
-      <div className="rc-period-grid is-years">
-        {years.map((year) => (
-          <button
-            key={year}
-            type="button"
-            className={year === selectedYear ? 'is-on' : undefined}
-            onClick={() => onPick(startOfYear(isoFromTs(Date.UTC(year, 0, 1))))}
-          >
-            {year}
-          </button>
-        ))}
-      </div>
-    </div>
+        </BarFrame>
   )
 }
