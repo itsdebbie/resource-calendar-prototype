@@ -103,6 +103,31 @@ export function columnWeekLoading(startTs: number, endTs: number, loadingWeeks: 
   return weekKeysForRange(startTs, endTs).some((key) => loading.has(key))
 }
 
+/**
+ * True when the overlapping weeks in `window` that have settled (not in-flight)
+ * are all cached. In-flight neighbor weeks keep existing bars on screen; a range
+ * with only in-flight weeks stays hidden so the cell skeleton can show.
+ */
+export function rangeReadyInWindow(
+  startIso: string,
+  endIso: string,
+  loadedWeeks: Iterable<string>,
+  loadingWeeks: Iterable<string>,
+  window: TimeWindow,
+) {
+  if (window.end <= window.start) return false
+  const from = Math.max(utc(startIso), window.start)
+  const to = Math.min(utc(endIso) + DAY_MS, window.end)
+  if (to <= from) return false
+  const loaded = loadedWeeks instanceof Set ? loadedWeeks : new Set(loadedWeeks)
+  const loading = loadingWeeks instanceof Set ? loadingWeeks : new Set(loadingWeeks)
+  const weeks = weekKeysForRange(from, to)
+  if (weeks.length === 0) return false
+  const settled = weeks.filter((week) => !loading.has(week))
+  if (settled.length === 0) return false
+  return settled.every((week) => loaded.has(week))
+}
+
 export function mockLatency() {
   return FETCH_LATENCY_MS
 }

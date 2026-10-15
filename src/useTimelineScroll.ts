@@ -47,6 +47,7 @@ export function useTimelineScroll(
   const [firstVisible, setFirstVisible] = useState(startIndex)
   const [scrollLeft, setScrollLeft] = useState(0)
   const [alignNonce, setAlignNonce] = useState(0)
+  const [alignedZoom, setAlignedZoom] = useState(zoom)
 
   const extentRef = useRef(extent)
   const colWRef = useRef(colW)
@@ -62,6 +63,28 @@ export function useTimelineScroll(
   const readyRef = useRef(false)
   const alignedAt = useRef(0)
   const slideRef = useRef(false)
+  const expandLockUntil = useRef(0)
+
+  // Snap first-visible / view window during render so the picker never paints a
+  // stale column index from the previous zoom (e.g. day index read as a month).
+  if (alignedZoom !== zoom) {
+    setAlignedZoom(zoom)
+    pendingAlign.current = true
+    readyRef.current = false
+    const { iso, offsetPx } = anchorRef.current
+    const next = extentAround(zoom, iso)
+    prevMin.current = next.min
+    prevZoom.current = zoom
+    setExtent((e) => (e.min === next.min && e.max === next.max ? e : next))
+    if (Math.abs(offsetPx) < 1) {
+      const idx = columnIndexAt(zoom, utc(iso))
+      const count = Math.max(8, Math.ceil(viewportPx / columnWidth(zoom, viewportPx)))
+      const start = columnAtIndex(zoom, idx).start
+      const end = columnAtIndex(zoom, idx + count - 1).end
+      setFirstVisible((prev) => (prev === idx ? prev : idx))
+      setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+    }
+  }
 
   const columns = useMemo(() => columnsInExtent(zoom, extent.min, extent.max), [zoom, extent.min, extent.max])
   const canvasWidth = gutter + columns.length * colW
@@ -203,7 +226,14 @@ export function useTimelineScroll(
       prevZoom.current = zoom
       pendingAlign.current = true
       readyRef.current = false
-      const next = extentAround(zoom, anchorRef.current.iso)
+      const iso = anchorRef.current.iso
+      const idx = columnIndexAt(zoom, utc(iso))
+      setFirstVisible((prev) => (prev === idx ? prev : idx))
+      const count = Math.max(8, Math.ceil(viewportPx / columnWidth(zoom, viewportPx)))
+      const start = columnAtIndex(zoom, idx).start
+      const end = columnAtIndex(zoom, idx + count - 1).end
+      setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+      const next = extentAround(zoom, iso)
       prevMin.current = next.min
       if (next.min !== extent.min || next.max !== extent.max) {
         setExtent(next)
@@ -225,7 +255,17 @@ export function useTimelineScroll(
       prevMin.current = extent.min
       pendingAlign.current = false
       readyRef.current = true
-      publishWindow(el)
+      expandLockUntil.current = performance.now() + 120
+      if (Math.abs(offsetPx) < 1) {
+        const idx = columnIndexAt(zoom, utc(iso))
+        setFirstVisible((prev) => (prev === idx ? prev : idx))
+        const count = Math.max(8, Math.ceil(visiblePx(el, gutterRef.current) / colW))
+        const start = columnAtIndex(zoom, idx).start
+        const end = columnAtIndex(zoom, idx + count - 1).end
+        setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
+      } else {
+        publishWindow(el)
+      }
     }
 
     if (pendingAlign.current) {
@@ -259,8 +299,10 @@ export function useTimelineScroll(
     if (!el) return
 
     const onScroll = () => {
+      if (pendingAlign.current) return
       publishWindow(el)
-      if (!readyRef.current || pendingAlign.current) return
+      if (!readyRef.current) return
+      if (performance.now() < expandLockUntil.current) return
       const width = colWRef.current
       const viewW = Math.min(el.clientWidth, window.innerWidth)
       const noOverflow = el.scrollWidth <= viewW + width

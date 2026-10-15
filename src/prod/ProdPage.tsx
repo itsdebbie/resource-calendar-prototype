@@ -18,6 +18,7 @@ import {
   Icon,
   NumberField,
   Popover,
+  Skeleton,
   Switch,
   Tab,
   Text,
@@ -1228,9 +1229,12 @@ function HeadRow({
           return (
             <div
               key={col.id}
-              className={`prod-day${weekend ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
+              className={`prod-day${weekend ? ' is-weekend' : ''}`}
               style={{ left: (col.index - minIndex) * colW, width: colW }}
             >
+              {columnWeekLoading(col.start, col.end, loadingWeeks) ? (
+                <Skeleton.Rectangle className="prod-week-skel is-head" height="100%" aria-hidden aria-label="" />
+              ) : null}
               <div className="prod-day-label">
                 <span className={`prod-day-num${isToday ? ' is-today' : ''}`}>{col.label}</span>
                 <span className="prod-day-wd">{DAYS_ABBR[day]}</span>
@@ -1352,10 +1356,14 @@ function DataRow({
         {columns.map((col) => (
           <div
             key={col.id}
-            className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}${columnWeekLoading(col.start, col.end, loadingWeeks) ? ' is-loading' : ''}`}
+            className={`prod-day${col.weekend && showWeekends ? ' is-weekend' : ''}`}
             style={{ left: (col.index - minIndex) * colW, width: colW }}
             onClick={onClear}
-          />
+          >
+            {columnWeekLoading(col.start, col.end, loadingWeeks) ? (
+              <Skeleton.Rectangle className="prod-week-skel" height="100%" aria-hidden aria-label="" />
+            ) : null}
+          </div>
         ))}
         {bars.map((bar) => (
           <BarView
