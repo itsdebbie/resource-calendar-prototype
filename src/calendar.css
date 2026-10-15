@@ -452,20 +452,117 @@
   top: calc(2px + var(--rc-dow-h));
 }
 
-.rc-date-jump {
-  display: flex;
+.rc-date-btn {
+  display: inline-flex;
   align-items: center;
-  gap: var(--rc-space-2);
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--a2-border-color-default, #c4c4c4);
+  border-radius: 8px;
+  background: var(--a2-background-color-default, #fff);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--a2-foreground-color-default, #040404);
+  font-variant-numeric: tabular-nums;
 }
 
-.rc-date-jump input {
+.rc-date-label-wrap {
+  position: relative;
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+}
+
+.rc-date-sizer {
+  visibility: hidden;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.rc-date-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.rc-date-caret {
+  color: var(--a2-foreground-color-subdued, #707070);
+  font-size: 10px;
+}
+
+.rc-date-pop {
+  padding: 4px;
+}
+
+.rc-period-pop {
+  padding: 8px;
+  min-width: 240px;
+}
+
+.rc-period-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rc-period-head button {
+  border: 0;
+  background: transparent;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
   font: inherit;
-  font-size: 14px;
-  padding: var(--rc-space-1) var(--rc-space-2);
-  border: 1px solid var(--a2-border-color-default, #c4c4c4);
-  border-radius: 6px;
+  font-size: 16px;
   color: var(--a2-foreground-color-default, #040404);
-  background: var(--a2-background-color-default, #fff);
+}
+
+.rc-period-head button:hover {
+  background: var(--a2-background-color-hover, #f4f4f4);
+}
+
+.rc-period-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.rc-period-grid.is-months,
+.rc-period-grid.is-years {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.rc-period-grid.is-quarters {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.rc-period-grid button {
+  border: 0;
+  background: transparent;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--a2-foreground-color-default, #040404);
+}
+
+.rc-period-grid button:hover {
+  background: var(--a2-background-color-hover, #f4f4f4);
+}
+
+.rc-period-grid button.is-on {
+  background: var(--a2-background-color-selected, #e8f1fc);
+  font-weight: 700;
 }
 
 .rc-row {

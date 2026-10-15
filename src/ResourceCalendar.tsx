@@ -13,6 +13,7 @@ import {
 import {
   Avatar,
   Button,
+  Calendar,
   Card,
   Chip,
   Dialog,
@@ -60,8 +61,12 @@ import {
   SHORT_BAR_PX,
   addDays,
   barPixelBox,
-  isIsoDate,
+  calendarStartDay,
   isoFromTs,
+  MONTH_LABELS,
+  PICKER_LABEL_SIZER,
+  pickerAnchorStart,
+  pickerLabel,
   activeSegments,
   barStyle,
   diffDays,
@@ -79,7 +84,11 @@ import {
   resizeSpanEnd,
   segmentIsSliver,
   shiftSpan,
+  startOfMonth,
+  startOfQuarter,
+  startOfYear,
   todayMarkerX,
+  utc,
   mondayOf,
   weekIndexOf,
   weekendSlices,
@@ -96,6 +105,7 @@ import { buildCrewRows, crewOnVisibleCount, snapshotCrewHours } from './crew'
 import { CrewPanel } from './CrewPanel'
 import {
   CalendarCheckIcon,
+  CalendarIcon,
   DeleteIcon,
   EditIcon,
   ExpandMoreIcon,
@@ -133,6 +143,11 @@ function isTextEntryTarget(target: EventTarget | null) {
   if (target instanceof HTMLElement && target.isContentEditable) return true
   if (!(target instanceof HTMLInputElement)) return false
   return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
+}
+
+function toDayIso(value: string) {
+  const iso = value.slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : ''
 }
 
 function readCrewOpen() {
@@ -256,7 +271,7 @@ export function ResourceCalendar() {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [activeProjects, setActiveProjects] = useState<string[]>(['summit', 'apex', 'monolith'])
   const [spans, setSpans] = useState<Record<string, Span>>({})
-  const [goTo, setGoTo] = useState(DEMO_TODAY)
+  const [pinnedIso, setPinnedIso] = useState<string | null>(DEMO_TODAY)
   const [showWeekends, setShowWeekends] = useState(false)
   const [crewOpen, setCrewOpen] = useState(readCrewOpen)
   const [showAllCrew, setShowAllCrew] = useState(false)
@@ -274,6 +289,14 @@ export function ResourceCalendar() {
   const timeline = useTimelineScroll(zoom, scrollRef)
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
+  const firstVisibleIso = isoFromTs(viewWindow.start)
+  const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
+  const pickerText = pickerLabel(zoom, pickerStart)
+
+  function pickDate(iso: string) {
+    setPinnedIso(iso)
+    jumpTo(iso, 0)
+  }
 
   const visColumns = useMemo(() => {
     const minIndex = columns[0]?.index ?? timeline.firstVisible
@@ -697,24 +720,12 @@ export function ResourceCalendar() {
                 <Button
                   size="small"
                   onClick={() => {
-                    setGoTo(DEMO_TODAY)
-                    jumpTo(DEMO_TODAY, 0)
+                    pickDate(DEMO_TODAY)
                   }}
                 >
                   Today
                 </Button>
-                <label className="rc-date-jump">
-                  <input
-                    type="date"
-                    value={goTo}
-                    onChange={(event) => {
-                      const next = event.target.value
-                      if (!isIsoDate(next)) return
-                      setGoTo(next)
-                      jumpTo(next, 0)
-                    }}
-                  />
-                </label>
+                <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
               </div>
               <div className="rc-toolbar-cluster">
                 <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
@@ -1980,5 +1991,194 @@ function BarSegment({
         >
           {inner}
         </div>
+  )
+}
+
+function DateJumpPicker({
+  zoom,
+  value,
+  label,
+  onPick,
+}: {
+  zoom: Zoom
+  value: string
+  label: string
+  onPick: (iso: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Popover open={open} onClose={() => setOpen(false)} placement="bottom-start" disableCaret>
+      <Popover.Trigger>
+        {(props) => (
+          <button
+            type="button"
+            className="rc-date-btn"
+            aria-label={label}
+            {...props}
+            onClick={() => setOpen((current) => !current)}
+          >
+            <Icon svg={CalendarIcon} size="small" inherit />
+            <span className="rc-date-label-wrap">
+              <span className="rc-date-sizer">{PICKER_LABEL_SIZER}</span>
+              <span className="rc-date-label">{label}</span>
+            </span>
+            <span className="rc-date-caret" aria-hidden>
+              ▾
+            </span>
+          </button>
+        )}
+      </Popover.Trigger>
+      <Popover.Content>
+        <div className="rc-date-pop">
+          {zoom === 'days' || zoom === 'weeks' ? (
+            <Calendar
+              key={zoom}
+              value={value}
+              defaultFocusedDate={value}
+              startDay={calendarStartDay()}
+              onSelection={({ value: next }) => {
+                if (typeof next !== 'string' || !next) return
+                const iso = toDayIso(next)
+                if (!iso) return
+                onPick(iso)
+                setOpen(false)
+              }}
+            />
+          ) : zoom === 'months' ? (
+            <MonthPicker
+              key={zoom}
+              value={value}
+              onPick={(iso) => {
+                onPick(iso)
+                setOpen(false)
+              }}
+            />
+          ) : zoom === 'quarters' ? (
+            <QuarterPicker
+              key={zoom}
+              value={value}
+              onPick={(iso) => {
+                onPick(iso)
+                setOpen(false)
+              }}
+            />
+          ) : (
+            <YearPicker
+              key={zoom}
+              value={value}
+              onPick={(iso) => {
+                onPick(iso)
+                setOpen(false)
+              }}
+            />
+          )}
+        </div>
+      </Popover.Content>
+    </Popover>
+  )
+}
+
+function MonthPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
+  const selected = new Date(utc(value))
+  const valueYear = selected.getUTCFullYear()
+  const [year, setYear] = useState(valueYear)
+  useEffect(() => {
+    setYear(valueYear)
+  }, [valueYear])
+  return (
+    <div className="rc-period-pop" data-picker-value={value} data-picker-year={year}>
+      <div className="rc-period-head">
+        <button type="button" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
+          ‹
+        </button>
+        <span>{year}</span>
+        <button type="button" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
+          ›
+        </button>
+      </div>
+      <div className="rc-period-grid is-months">
+        {MONTH_LABELS.map((name, month) => (
+          <button
+            key={name}
+            type="button"
+            className={year === selected.getUTCFullYear() && month === selected.getUTCMonth() ? 'is-on' : undefined}
+            onClick={() => onPick(startOfMonth(isoFromTs(Date.UTC(year, month, 1))))}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function QuarterPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
+  const selected = new Date(utc(value))
+  const selectedQ = Math.floor(selected.getUTCMonth() / 3)
+  const [year, setYear] = useState(selected.getUTCFullYear())
+  useEffect(() => {
+    setYear(new Date(utc(value)).getUTCFullYear())
+  }, [value])
+  return (
+    <div className="rc-period-pop">
+      <div className="rc-period-head">
+        <button type="button" onClick={() => setYear((y) => y - 1)} aria-label="Previous year">
+          ‹
+        </button>
+        <span>{year}</span>
+        <button type="button" onClick={() => setYear((y) => y + 1)} aria-label="Next year">
+          ›
+        </button>
+      </div>
+      <div className="rc-period-grid is-quarters">
+        {[0, 1, 2, 3].map((q) => (
+          <button
+            key={q}
+            type="button"
+            className={year === selected.getUTCFullYear() && q === selectedQ ? 'is-on' : undefined}
+            onClick={() => onPick(startOfQuarter(isoFromTs(Date.UTC(year, q * 3, 1))))}
+          >
+            Q{q + 1}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function YearPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
+  const selectedYear = new Date(utc(value)).getUTCFullYear()
+  const [origin, setOrigin] = useState(Math.floor(selectedYear / 12) * 12)
+  useEffect(() => {
+    const y = new Date(utc(value)).getUTCFullYear()
+    setOrigin(Math.floor(y / 12) * 12)
+  }, [value])
+  const years = Array.from({ length: 12 }, (_, i) => origin + i)
+  return (
+    <div className="rc-period-pop">
+      <div className="rc-period-head">
+        <button type="button" onClick={() => setOrigin((y) => y - 12)} aria-label="Previous years">
+          ‹
+        </button>
+        <span>
+          {years[0]}–{years[years.length - 1]}
+        </span>
+        <button type="button" onClick={() => setOrigin((y) => y + 12)} aria-label="Next years">
+          ›
+        </button>
+      </div>
+      <div className="rc-period-grid is-years">
+        {years.map((year) => (
+          <button
+            key={year}
+            type="button"
+            className={year === selectedYear ? 'is-on' : undefined}
+            onClick={() => onPick(startOfYear(isoFromTs(Date.UTC(year, 0, 1))))}
+          >
+            {year}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
