@@ -3,7 +3,10 @@ import type { Zoom } from './data'
 import {
   BUFFER_COLS,
   DEMO_TODAY,
-  EDGE_PX,
+  EDGE_SCROLL_GAIN,
+  EDGE_SCROLL_MAX_PX,
+  EDGE_SCROLL_MIN_PX,
+  EDGE_SCROLL_ZONE_PX,
   GUTTER,
   columnAtIndex,
   columnIndexAt,
@@ -16,6 +19,7 @@ import {
   worldXForDate,
   type TimeWindow,
 } from './timeline'
+import type { ScrollDemoMode } from './scrollDemo'
 
 function extentAround(zoom: Zoom, iso: string, extra = 24) {
   const idx = columnIndexAt(zoom, utc(iso))
@@ -29,12 +33,27 @@ function visiblePx(el: HTMLElement, gutter: number) {
 export function useTimelineScroll(
   zoom: Zoom,
   scrollRef: RefObject<HTMLDivElement | null>,
-  options?: { gutter?: number; initialIso?: string },
+  options?: {
+    gutter?: number
+    initialIso?: string
+    mode?: ScrollDemoMode
+    boundStartIso?: string
+    boundEndIso?: string
+  },
 ) {
   const gutter = options?.gutter ?? GUTTER
   const gutterRef = useRef(gutter)
   gutterRef.current = gutter
   const startIso = options?.initialIso ?? DEMO_TODAY
+  const mode = options?.mode ?? 'infinite'
+  const modeRef = useRef(mode)
+  modeRef.current = mode
+  const boundStartIso = options?.boundStartIso
+  const boundEndIso = options?.boundEndIso
+  const boundStartRef = useRef(boundStartIso)
+  const boundEndRef = useRef(boundEndIso)
+  boundStartRef.current = boundStartIso
+  boundEndRef.current = boundEndIso
   const [viewportPx, setViewportPx] = useState(980)
   const colW = columnWidth(zoom, viewportPx)
   const anchorRef = useRef({ iso: startIso, offsetPx: 0 })
@@ -65,6 +84,23 @@ export function useTimelineScroll(
   const slideRef = useRef(false)
   const expandLockUntil = useRef(0)
 
+  const boundIndexRange = useCallback(() => {
+    const start = boundStartRef.current
+    const end = boundEndRef.current
+    if (modeRef.current !== 'extend' || !start || !end) return null
+    const z = zoomRef.current
+    return { min: columnIndexAt(z, utc(start)), max: columnIndexAt(z, utc(end)) }
+  }, [])
+
+  function extentForZoom(nextZoom: Zoom, iso: string) {
+    const start = boundStartRef.current
+    const end = boundEndRef.current
+    if (modeRef.current === 'extend' && start && end) {
+      return { min: columnIndexAt(nextZoom, utc(start)), max: columnIndexAt(nextZoom, utc(end)) }
+    }
+    return extentAround(nextZoom, iso)
+  }
+
   // Snap first-visible / view window during render so the picker never paints a
   // stale column index from the previous zoom (e.g. day index read as a month).
   if (alignedZoom !== zoom) {
@@ -72,7 +108,7 @@ export function useTimelineScroll(
     pendingAlign.current = true
     readyRef.current = false
     const { iso, offsetPx } = anchorRef.current
-    const next = extentAround(zoom, iso)
+    const next = extentForZoom(zoom, iso)
     prevMin.current = next.min
     prevZoom.current = zoom
     setExtent((e) => (e.min === next.min && e.max === next.max ? e : next))
@@ -129,19 +165,48 @@ export function useTimelineScroll(
 
   const expandToIndex = useCallback((index: number) => {
     setExtent((e) => {
+      const bounds = boundIndexRange()
+      if (bounds) {
+        const next = {
+          min: Math.max(bounds.min, Math.min(e.min, index)),
+          max: Math.min(bounds.max, Math.max(e.max, index)),
+        }
+        if (next.min === e.min && next.max === e.max) return e
+        return next
+      }
       let { min, max } = e
       if (index < min) min = index - BUFFER_COLS
       if (index > max) max = index + BUFFER_COLS
       if (min === e.min && max === e.max) return e
       return { min, max }
     })
-  }, [])
+  }, [boundIndexRange])
 
   const slideByCols = useCallback((cols: number) => {
     if (!cols) return
-    slideRef.current = true
-    setExtent((e) => ({ min: e.min + cols, max: e.max + cols }))
-  }, [])
+    const bounds = boundIndexRange()
+    setExtent((e) => {
+      if (bounds) {
+        const width = e.max - e.min
+        let min = e.min + cols
+        let max = e.max + cols
+        if (min < bounds.min) {
+          min = bounds.min
+          max = min + width
+        }
+        if (max > bounds.max) {
+          max = bounds.max
+          min = max - width
+        }
+        if (min < bounds.min) min = bounds.min
+        if (min === e.min && max === e.max) return e
+        slideRef.current = true
+        return { min, max }
+      }
+      slideRef.current = true
+      return { min: e.min + cols, max: e.max + cols }
+    })
+  }, [boundIndexRange])
 
   const setAnchor = useCallback((iso: string, offsetPx: number) => {
     anchorRef.current = { iso, offsetPx }
@@ -152,7 +217,7 @@ export function useTimelineScroll(
       anchorRef.current = { iso, offsetPx }
       pendingAlign.current = true
       readyRef.current = false
-      setExtent(extentAround(zoom, iso))
+      setExtent(extentForZoom(zoom, iso))
       setAlignNonce((n) => n + 1)
     },
     [zoom],
@@ -186,17 +251,21 @@ export function useTimelineScroll(
     [scrollRef, expandToIndex, publishWindow, slideByCols],
   )
 
+  /** Edge auto-scroll while a bar is dragged or resized. Speed ramps toward the edge. */
   const autoScrollFromPointer = useCallback(
     (clientX: number) => {
       const el = scrollRef.current
       if (!el) return 0
       const rect = el.getBoundingClientRect()
       const viewW = Math.min(el.clientWidth, window.innerWidth)
-      const left = rect.left + gutterRef.current + EDGE_PX
-      const right = rect.left + viewW - EDGE_PX
+      const left = rect.left + gutterRef.current + EDGE_SCROLL_ZONE_PX
+      const right = rect.left + viewW - EDGE_SCROLL_ZONE_PX
       let dx = 0
-      if (clientX > right) dx = Math.min(36, 12 + (clientX - right) / 3)
-      else if (clientX < left) dx = -Math.min(36, 12 + (left - clientX) / 3)
+      if (clientX > right) {
+        dx = Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (clientX - right) / EDGE_SCROLL_GAIN)
+      } else if (clientX < left) {
+        dx = -Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (left - clientX) / EDGE_SCROLL_GAIN)
+      }
       if (dx) scrollBy(dx)
       return dx
     },
@@ -216,6 +285,24 @@ export function useTimelineScroll(
     return () => ro.disconnect()
   }, [scrollRef])
 
+  const prevMode = useRef(mode)
+  useLayoutEffect(() => {
+    const bounds =
+      mode === 'extend' && boundStartIso && boundEndIso
+        ? { min: columnIndexAt(zoom, utc(boundStartIso)), max: columnIndexAt(zoom, utc(boundEndIso)) }
+        : null
+    if (prevMode.current !== mode) {
+      prevMode.current = mode
+      pendingAlign.current = true
+      readyRef.current = false
+      setExtent(bounds ?? extentAround(zoom, anchorRef.current.iso))
+      setAlignNonce((n) => n + 1)
+      return
+    }
+    if (!bounds) return
+    setExtent((e) => (e.min === bounds.min && e.max === bounds.max ? e : bounds))
+  }, [mode, boundStartIso, boundEndIso, zoom])
+
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
@@ -233,7 +320,7 @@ export function useTimelineScroll(
       const start = columnAtIndex(zoom, idx).start
       const end = columnAtIndex(zoom, idx + count - 1).end
       setViewWindow((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
-      const next = extentAround(zoom, iso)
+      const next = extentForZoom(zoom, iso)
       prevMin.current = next.min
       if (next.min !== extent.min || next.max !== extent.max) {
         setExtent(next)
@@ -302,6 +389,7 @@ export function useTimelineScroll(
       if (pendingAlign.current) return
       publishWindow(el)
       if (!readyRef.current) return
+      if (modeRef.current === 'extend') return
       if (performance.now() < expandLockUntil.current) return
       const width = colWRef.current
       const viewW = Math.min(el.clientWidth, window.innerWidth)
@@ -318,6 +406,7 @@ export function useTimelineScroll(
 
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
+      if (modeRef.current === 'extend') return
       const dx = event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX
       if (Math.abs(dx) < 2) return
       const viewW = Math.min(el.clientWidth, window.innerWidth)

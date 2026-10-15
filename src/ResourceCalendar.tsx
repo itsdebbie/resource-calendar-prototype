@@ -107,11 +107,11 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
+import { barClipPath, extendEndAfterDrop, initialExtendBounds, useScrollDemo } from './scrollDemo'
 import { useWeekChunks } from './useWeekChunks'
 import {
   columnWeekLoading,
   fetchAssignmentWeek,
-  rangeReadyInWindow,
   ROW_ESTIMATE_PX,
   visibleRowWindowHeights,
 } from './weekChunks'
@@ -313,8 +313,22 @@ export function ResourceCalendar() {
   const [hoursBefore, setHoursBefore] = useState<Record<string, number> | null>(null)
   const zoomLock = useRef(0)
   const editable = isEditableZoom(zoom)
+  const { mode: scrollMode } = useScrollDemo()
+  const seedBounds = useMemo(
+    () => initialExtendBounds(DEMO_TODAY, [...assignments, ...projects, ...phases]),
+    [],
+  )
+  const [boundEnd, setBoundEnd] = useState(seedBounds.end)
+  const dropEndRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (scrollMode === 'extend') setBoundEnd(seedBounds.end)
+  }, [scrollMode, seedBounds.end])
 
-  const timeline = useTimelineScroll(zoom, scrollRef)
+  const timeline = useTimelineScroll(zoom, scrollRef, {
+    mode: scrollMode,
+    boundStartIso: scrollMode === 'extend' ? seedBounds.start : undefined,
+    boundEndIso: scrollMode === 'extend' ? boundEnd : undefined,
+  })
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, timeline.firstVisible).start)
@@ -505,6 +519,7 @@ export function ResourceCalendar() {
         const end = preview.reduce((max, span) => (span.end > max ? span.end : max), preview[0]!.end)
         const label =
           drag.mode === 'move' ? formatMoveRange(start, end) : drag.mode === 'resize' ? formatDay(end) : formatDay(date)
+        dropEndRef.current = end
         setDragHint({
           mode: drag.mode,
           x: clientX,
@@ -532,7 +547,13 @@ export function ResourceCalendar() {
       setDragHint(null)
       setHoursBefore(null)
       document.body.classList.remove('rc-grabbing')
-      if (drag.moved) ignoreClick.current = true
+      if (drag.moved) {
+        ignoreClick.current = true
+        if (scrollMode === 'extend' && dropEndRef.current) {
+          setBoundEnd((prev) => extendEndAfterDrop(dropEndRef.current!, prev, viewWindow))
+        }
+      }
+      dropEndRef.current = null
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -540,7 +561,7 @@ export function ResourceCalendar() {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [applyDrag])
+  }, [applyDrag, scrollMode, viewWindow])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -1014,7 +1035,7 @@ export function ResourceCalendar() {
         </Flex>
       </Card>
 
-      {zoom === 'weeks' && dragHint ? (
+      {dragHint ? (
         <div className="rc-drag-tip" style={{ left: dragHint.x, top: dragHint.y }}>
           {dragHint.label}
         </div>
@@ -1303,14 +1324,7 @@ function RcGridRow({
     viewWindow,
     zoom,
     assignmentCatalog,
-    loadedWeeks,
-    loadingWeeks,
-    conflictWindow,
-    dragIds,
   } = useGantt()
-
-  const chunkReady = (id: string, start: string, end: string) =>
-    dragIds.has(id) || rangeReadyInWindow(start, end, loadedWeeks, loadingWeeks, conflictWindow)
 
   if (spec.kind === 'project') {
     const project = spec.project
@@ -1318,7 +1332,10 @@ function RcGridRow({
     const projectId = `proj-${project.id}`
     const projectSpan = resolve(projectId, project.start, project.end)
     const barHours = project.scheduledHours ? `${project.scheduledHours}h` : undefined
-    const showProjectBar = !project.leftover && chunkReady(projectId, project.start, project.end)
+    // Catalog project/phase spans are not week-fetched. Gating them on
+    // rangeReadyInWindow(conflictWindow) hid Quarter bars: the 8-column (~2y)
+    // viewport makes the 10-week cache miss the project dates.
+    const showProjectBar = !project.leftover
     return (
       <div className={`rc-row is-group${projectOver ? ' is-over' : ''}`}>
         <div className="rc-gutter">
@@ -1373,20 +1390,18 @@ function RcGridRow({
           <BudgetNums budget={phase.budgetHours} scheduled={phase.scheduledHours} actual={phase.actualHours} />
         </div>
         <Timeline>
-          {chunkReady(phase.id, phase.start, phase.end) ? (
-            <SpanBar
-              id={phase.id}
-              span={span}
-              color={project.color}
-              ink={project.ink}
-              name={phase.name}
-              hours={hours}
-              scheduled={phase.scheduledHours}
-              budget={phase.budgetHours}
-              actual={phase.actualHours}
-              selected={selectedKeys.has(phase.id)}
-            />
-          ) : null}
+          <SpanBar
+            id={phase.id}
+            span={span}
+            color={project.color}
+            ink={project.ink}
+            name={phase.name}
+            hours={hours}
+            scheduled={phase.scheduledHours}
+            budget={phase.budgetHours}
+            actual={phase.actualHours}
+            selected={selectedKeys.has(phase.id)}
+          />
         </Timeline>
       </div>
     )
@@ -1431,11 +1446,9 @@ function RcGridRow({
       .filter((row) => row.personId === personId)
       .map((row) => ({ ...row, ...resolve(row.id, row.start, row.end, row.offDays) }))
     const meta =
-      personId === 'unassigned'
-        ? { text: 'Needs a tech', detail: rows.map((r) => r.label).join(' + '), over: false }
-        : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
+      personId === 'unassigned' ? null : personHoursInWindow(personId, resolved, viewWindow, rangeLabel, includeWeekends)
     return (
-      <div className={`rc-row is-group is-packed${meta.over ? ' is-capacity' : ''}`}>
+      <div className={`rc-row is-group is-packed${meta?.over ? ' is-capacity' : ''}`}>
         <div className="rc-gutter">
           <button className={`rc-chevron ${open ? 'is-open' : ''}`} type="button" onClick={() => onToggle(personId)} aria-label={open ? 'Collapse' : 'Expand'}>
             <Icon svg={ExpandMoreIcon} size="small" inherit />
@@ -1449,7 +1462,13 @@ function RcGridRow({
           )}
           <div className="rc-gutter-copy">
             <Name>{person?.name ?? 'Unassigned'}</Name>
-            <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
+            {meta ? (
+              <HoursMeta scheduled={meta.booked} actual={meta.actual} extra={meta.extra} over={meta.over} detail={meta.detail} />
+            ) : (
+              <Text size="small" subdued>
+                Needs a tech
+              </Text>
+            )}
           </div>
         </div>
         <PackedPersonBars rows={rows} personId={personId} showLabels={!open} />
@@ -1476,15 +1495,32 @@ function RcGridRow({
   )
 }
 
-function HoursMeta({ text, detail, warn }: { text: string; detail?: string; warn?: boolean }) {
+function HoursMeta({
+  scheduled,
+  actual,
+  extra,
+  over,
+  detail,
+}: {
+  scheduled: number
+  actual: number
+  extra: number
+  over: boolean
+  detail?: string
+}) {
+  const label = `Scheduled ${scheduled}h / Actual ${actual}h`
   return (
     <Tooltip openOnHover>
       <Tooltip.Trigger>
-        <Text size="small" className={`rc-truncate${warn ? ' rc-hours-warn' : ''}`} subdued={!warn}>
-          {text}
-        </Text>
+        <span className={`rc-hours rc-truncate${over ? ' rc-hours-warn' : ''}`}>
+          {over ? <Icon svg={WarningIcon} size="small" inherit className="rc-bar-glyph" /> : null}
+          <Text size="small" subdued={!over} className={over ? 'rc-hours-warn' : undefined}>
+            {label}
+          </Text>
+          {extra > 0 ? <span className="rc-hours-variance">+{extra}h</span> : null}
+        </span>
       </Tooltip.Trigger>
-      <Tooltip.Content>{detail || text}</Tooltip.Content>
+      <Tooltip.Content>{detail || label}</Tooltip.Content>
     </Tooltip>
   )
 }
@@ -1536,7 +1572,7 @@ function PersonAssignmentRow({
         <Avatar name={person.name} size="small" color={person.color} />
         <div className="rc-gutter-copy">
           <Name>{person.name}</Name>
-          <HoursMeta text={meta.text} detail={meta.detail} warn={meta.over} />
+          <HoursMeta scheduled={meta.booked} actual={meta.actual} extra={meta.extra} over={meta.over} detail={meta.detail} />
         </div>
       </div>
       <PackedPersonBars rows={rows} personId={personId} showLabels />
@@ -2007,6 +2043,7 @@ function BarSegment({
     ...barSurface(color, ink, unassigned),
     '--rc-lane': lane,
     '--rc-label-shift': `${shift}px`,
+    clipPath: barClipPath(leftPx, widthPx, viewLeft, viewPx),
   } as CSSProperties
 
   const inner = (
