@@ -682,7 +682,7 @@
 
 .rc-bar.is-dragging {
   cursor: grabbing;
-  z-index: 5;
+  z-index: 3;
   filter: brightness(0.96);
 }
 

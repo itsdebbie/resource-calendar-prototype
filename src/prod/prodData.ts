@@ -9,8 +9,6 @@ export const DEFAULT_GANTT = '#1360d9'
 export const GROUP_ORANGE = '#e8772a'
 export const RC_CYAN = '#00c4d8'
 export const TODAY_BLUE = '#2270ee'
-export const EDGE_ZONE = 40
-export const EDGE_DELAY_MS = 300
 export const WORKDAY = { start: '9:00 AM', end: '5:00 PM' }
 export const ADDRESS = '800 OCCIDENTAL AVENUE SOUTH'
 
