@@ -102,11 +102,31 @@ export function pickerAnchorStart(zoom: Zoom, firstVisibleIso: string, pinnedIso
   return startOfYear(firstVisibleIso)
 }
 
-export function pickerLabel(zoom: Zoom, startIso: string) {
+/** How many zoom columns actually fit in the timeline viewport (not the render buffer). */
+export function visibleFitCount(viewportPx: number, colW: number) {
+  return Math.max(1, Math.ceil(Math.max(1, viewportPx) / Math.max(1, colW)))
+}
+
+/** Inclusive date range of the columns on screen, used for the toolbar picker label. */
+export function visibleColumnRange(
+  zoom: Zoom,
+  firstVisible: number,
+  viewportPx: number,
+  colW: number,
+  extentMax = firstVisible,
+) {
+  const fit = visibleFitCount(viewportPx, colW)
+  const lastIndex = Math.max(firstVisible, Math.min(firstVisible + fit - 1, extentMax))
+  const first = columnAtIndex(zoom, firstVisible)
+  const last = columnAtIndex(zoom, lastIndex)
+  return { start: isoFromTs(first.start), end: isoFromTs(last.end - DAY_MS), count: lastIndex - firstVisible + 1 }
+}
+
+export function pickerLabel(zoom: Zoom, startIso: string, endIso?: string) {
   const d = new Date(utc(startIso))
   if (zoom === 'days' || zoom === 'weeks') {
-    const span = zoom === 'days' ? DAY_VIEW_DAYS : 14
-    const end = addDays(startIso, span - 1)
+    const fallback = zoom === 'days' ? DAY_VIEW_DAYS : 14
+    const end = endIso ?? addDays(startIso, fallback - 1)
     const a = new Date(utc(startIso))
     const b = new Date(utc(end))
     const year = b.getUTCFullYear()

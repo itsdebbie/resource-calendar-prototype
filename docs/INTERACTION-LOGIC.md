@@ -18,13 +18,13 @@ Fixed-width control (`PICKER_LABEL_SIZER`, currently `Sep 30 to Oct 20, 2026`). 
 
 | Zoom | Label | Range |
 | --- | --- | --- |
-| Day | `Oct 15 to Nov 4, 2026` (short `to`, no weekday) | **21 days** from the period-anchored start |
-| Week | `Oct 12 to 25, 2026` | 14 days (week period still snaps to the first visible week) |
+| Day | `Oct 15 to Nov 4, 2026` (short `to`, no weekday) | Visible day columns (~**21 days**) |
+| Week | `Oct 12 to Nov 8, 2026` | First through last **visible week column** (not a hardcoded 14 days) |
 | Month | `Oct 2026` | Calendar month |
 | Quarter | `Q4 2026` | Calendar quarter |
 | Year | `2026` | Calendar year |
 
-Day/Week snap the picker to the first visible week unless a picked date is still in that week (`pickerAnchorStart`).
+The popover still snaps Day/Week to the first visible week unless a picked date is still in that week (`pickerAnchorStart`). The chip **label** follows the columns on screen (`visibleColumnRange`).
 
 ## Extend-on-drop buffers
 

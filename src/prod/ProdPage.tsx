@@ -38,6 +38,7 @@ import {
   monthBands,
   pickerAnchorStart,
   pickerLabel,
+  visibleColumnRange,
   sliceVisibleColumns,
   utc,
   worldXForDate,
@@ -327,6 +328,8 @@ function ProdGrid({ view }: { view: ProdView }) {
     scrollLeft,
     viewWindow,
     visibleCount,
+    viewportPx,
+    extent,
     autoScrollFromPointer,
     setAnchor,
   } = timeline
@@ -348,7 +351,8 @@ function ProdGrid({ view }: { view: ProdView }) {
   )
   const firstVisibleIso = isoFromTs(columnAtIndex(zoom, firstVisible).start)
   const pickerStart = pickerAnchorStart(zoom, firstVisibleIso, pinnedIso)
-  const pickerText = pickerLabel(zoom, pickerStart)
+  const visibleRange = visibleColumnRange(zoom, firstVisible, viewportPx, colW, extent.max)
+  const pickerText = pickerLabel(zoom, visibleRange.start, visibleRange.end)
   const changeZoom = useCallback(
     (next: Zoom, iso?: string, offsetPx?: number) => {
       if (next === zoom) return
@@ -1487,7 +1491,7 @@ function BarView({
   const days = barDays(bar)
   const selectedDays = days.filter((iso) => selected.has(cellId(bar.id, iso)))
   const allSelected = selectedDays.length > 0 && selectedDays.length === days.length
-  const hatches = showWeekends ? weekendsIn(bar.start, bar.end) : []
+  const hatches = zoom === 'days' && showWeekends ? weekendsIn(bar.start, bar.end) : []
   const leftPx = box.left + 2
   const widthPx = Math.max(8, box.width - 4)
   const viewLeft = scrollLeft
