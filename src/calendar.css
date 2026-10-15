@@ -105,6 +105,16 @@
   max-width: 100%;
 }
 
+.rc-gantt-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+}
+
 .rc-scroll {
   overflow-x: auto;
   overflow-y: auto;
@@ -652,6 +662,7 @@
   margin-top: calc(var(--rc-bar-h) / -2);
   height: var(--rc-bar-h);
   z-index: 2;
+  overflow: hidden;
 }
 
 .rc-bar-wrap:not(.is-dragging) {
@@ -757,6 +768,7 @@
   height: var(--rc-bar-h);
   z-index: 3;
   min-width: 124px;
+  overflow: hidden;
 }
 
 .rc-timeline.is-packed .rc-chip-wrap {

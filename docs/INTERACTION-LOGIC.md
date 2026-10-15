@@ -2,7 +2,16 @@
 
 Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`.
 
-Infinite scroll is **dropped**. The timeline is finite and grows with **extend-on-drop** in both directions.
+There is **no prototype mode switch**. Continuous pan and drop-extend are both always on.
+
+## Continuous pan
+
+Plain horizontal pan (trackpad swipe, Shift+mouse wheel, scrollbar thumb/track) never hits a wall. The sliding extent grows in the pan direction as the viewport or thumb nears either end, so columns keep filling the timeline and the range never dead-ends.
+
+- Day viewport still targets **21 day columns** (`DAY_VIEW_DAYS`).
+- Grid columns never end with blank space on the left or right.
+- Grow amount is the zoom buffer (`padColumns`): Day 21, Week 9, Month 4, Quarter 6 (~16 months), Year 2.
+- A visible horizontal scrollbar is pinned at the bottom of the timeline viewport on every route and zoom (`overflow-x: scroll`). Dragging the thumb or clicking the track pans time and extends the range the same way.
 
 ## Day viewport
 
@@ -18,17 +27,17 @@ Fixed-width control (`PICKER_LABEL_SIZER`, currently `Sep 30 to Oct 20, 2026`). 
 
 | Zoom | Label | Range |
 | --- | --- | --- |
-| Day | `Oct 15 to Nov 4, 2026` (short `to`, no weekday) | Visible day columns (~**21 days**) |
+| Day | `Oct 15 to Nov 4, 2026` (short `to`, no weekday) | First through last **visible day column** (~**21 days**) |
 | Week | `Oct 12 to Nov 8, 2026` | First through last **visible week column** (not a hardcoded 14 days) |
 | Month | `Oct 2026` | Calendar month |
 | Quarter | `Q4 2026` | Calendar quarter |
 | Year | `2026` | Calendar year |
 
-The popover still snaps Day/Week to the first visible week unless a picked date is still in that week (`pickerAnchorStart`). The chip **label** follows the columns on screen (`visibleColumnRange`).
+The popover still snaps Day/Week to the first visible week unless a picked date is still in that week (`pickerAnchorStart`). The chip **label** follows the columns on screen (`visibleColumnRange` from `firstVisible` / `lastVisible`) and updates while scrolling.
 
-## Extend-on-drop buffers
+## Drop-extend buffers
 
-Same magnitude **forward and backward**. After a drag **reaches an edge and drops**, the timeline grows by the buffer **past that drop edge** (bar start on the left, bar end on the right). New grid columns/headers are painted; the viewport is not jumped, so the canvas does not flicker or go blank.
+Same magnitude **forward and backward**. While dragging a bar, the viewport auto-scrolls near the left/right edge. On drop at/near that edge, the timeline grows by the buffer **past that drop edge** (bar start on the left, bar end on the right). New grid columns/headers are painted; the viewport is not jumped, so the canvas does not flicker or go blank.
 
 | Zoom | Buffer each way |
 | --- | --- |
@@ -42,13 +51,13 @@ Same magnitude **forward and backward**. After a drag **reaches an edge and drop
 
 Algorithm (`extendBoundsAfterDrop`):
 
-1. While dragging, if auto-scroll hits the current start/end bound, grow that bound by **one zoom column** so edge scrolling stays continuous.
+1. While dragging, if auto-scroll hits the current start/end bound, grow that bound by the zoom pad so edge scrolling stays continuous.
 2. On drop, if the pointer hit an edge **or** the bar edge sits in the last visible window of that bound, set:
    - `boundStart = min(boundStart, addExtendBuffer(barStart, zoom, -1))`
    - `boundEnd = max(boundEnd, addExtendBuffer(barEnd, zoom, +1))`
 3. Re-render columns for the new extent. Keep `scrollLeft` (compensate if `extent.min` moved). Do not jump to the new end.
 
-Opening finite range = today’s visible window ∪ placeholder data span.
+Opening range = today’s visible window ∪ placeholder data span ∪ pan pad on each side.
 
 ## Snap while dragging / resizing
 
@@ -72,7 +81,15 @@ Move keeps duration: delta is `snap(pointer) − snap(origin)`. Live date label 
 | Quarter | Whole bar | Both edges, on hover | No |
 | Year | Whole bar | Both edges, on hover | No |
 
-Move **and** resize are enabled in **all five zooms**. Selection ring sits on an unclipped wrapper (Anvil info/selected `--a2-status-color-info` / `#0265dc`), so `clip-path` on the bar fill cannot hide it.
+Move **and** resize are enabled in **all five zooms**, including Year. Selection ring sits on the wrapper so clipping the bar fill cannot hide it.
+
+## Left pane (WBS / Name)
+
+Bars never paint under the sticky left gutter. The bar wrap is clipped to the timeline (`clipBarToGutter`) so the visible left edge — and its resize handle — sits in the timeline, not under the name pane. Grab/drop sensitivity is the same on the left as the right.
+
+## Weekends
+
+Weekends are **off by default** in Week and coarser zooms. The hatch always shows in Day, or when **Show Weekends** is on (`weekendsVisible`).
 
 ## Motion
 
@@ -86,10 +103,10 @@ Use **Anvil 2 duration tokens only**:
 
 ## Smoothness rules
 
-- No infinite scroll grow/slide.
+- Continuous pan grows the extent before the thumb or wheel can dead-end.
 - No post-drop `scrollLeft = scrollWidth` jump (that blanked the right side).
 - `publishWindow` stays in sync with native pan so sliced columns never leave a void.
-- Edge auto-scroll (`EDGE_SCROLL_*`) keeps running while the pointer is in the zone; hitting a bound grows that bound by a column instead of stalling.
+- Edge auto-scroll (`EDGE_SCROLL_*`) keeps running while the pointer is in the zone.
 - Picker width is sizer-locked so the toolbar does not thrash on zoom/scroll.
 - Resize hit targets stay active on both edges (12px); the glyph fades in on hover.
 
