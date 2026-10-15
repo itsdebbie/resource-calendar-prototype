@@ -105,6 +105,7 @@ import {
   type TimeWindow,
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
+import { barClipPath, extendEndAfterDrop, initialExtendBounds, useScrollDemo } from './scrollDemo'
 import { useWeekChunks } from './useWeekChunks'
 import { columnWeekLoading, fetchAssignmentWeek, ROW_ESTIMATE_PX, visibleRowWindowHeights } from './weekChunks'
 import { BAR_FILL_UNASSIGNED, BAR_INK_UNASSIGNED, barTone } from './palette'
@@ -304,8 +305,22 @@ export function ResourceCalendar() {
   const [hoursBefore, setHoursBefore] = useState<Record<string, number> | null>(null)
   const zoomLock = useRef(0)
   const editable = isEditableZoom(zoom)
+  const { mode: scrollMode } = useScrollDemo()
+  const seedBounds = useMemo(
+    () => initialExtendBounds(DEMO_TODAY, [...assignments, ...projects, ...phases]),
+    [],
+  )
+  const [boundEnd, setBoundEnd] = useState(seedBounds.end)
+  const dropEndRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (scrollMode === 'extend') setBoundEnd(seedBounds.end)
+  }, [scrollMode, seedBounds.end])
 
-  const timeline = useTimelineScroll(zoom, scrollRef)
+  const timeline = useTimelineScroll(zoom, scrollRef, {
+    mode: scrollMode,
+    boundStartIso: scrollMode === 'extend' ? seedBounds.start : undefined,
+    boundEndIso: scrollMode === 'extend' ? boundEnd : undefined,
+  })
   const { columns, colW, viewWindow, dateAtClientX, jumpTo, autoScrollFromPointer, setAnchor, scrollLeft, viewportPx } =
     timeline
   const firstVisibleIso = isoFromTs(viewWindow.start)
@@ -495,6 +510,7 @@ export function ResourceCalendar() {
         const end = preview.reduce((max, span) => (span.end > max ? span.end : max), preview[0]!.end)
         const label =
           drag.mode === 'move' ? formatMoveRange(start, end) : drag.mode === 'resize' ? formatDay(end) : formatDay(date)
+        dropEndRef.current = end
         setDragHint({
           mode: drag.mode,
           x: clientX,
@@ -522,7 +538,13 @@ export function ResourceCalendar() {
       setDragHint(null)
       setHoursBefore(null)
       document.body.classList.remove('rc-grabbing')
-      if (drag.moved) ignoreClick.current = true
+      if (drag.moved) {
+        ignoreClick.current = true
+        if (scrollMode === 'extend' && dropEndRef.current) {
+          setBoundEnd((prev) => extendEndAfterDrop(dropEndRef.current!, prev, viewWindow))
+        }
+      }
+      dropEndRef.current = null
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -530,7 +552,7 @@ export function ResourceCalendar() {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [applyDrag])
+  }, [applyDrag, scrollMode, viewWindow])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -1972,6 +1994,7 @@ function BarSegment({
     ...barSurface(color, ink, unassigned),
     '--rc-lane': lane,
     '--rc-label-shift': `${shift}px`,
+    clipPath: barClipPath(leftPx, widthPx, viewLeft, viewPx),
   } as CSSProperties
 
   const inner = (
