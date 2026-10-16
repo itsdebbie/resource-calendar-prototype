@@ -65,6 +65,19 @@ export const MOTION_DURATION_FAST = 'var(--a2-duration-fast, 100ms)'
  */
 export const MOTION_EASING = 'ease-out'
 
+/** Horizontal pan delta from a wheel event. Shift+vertical becomes time pan. */
+export function wheelPanDelta(
+  event: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'shiftKey' | 'ctrlKey' | 'metaKey'>,
+  treatDeltaYAsPan = false,
+) {
+  if (event.ctrlKey || event.metaKey) return 0
+  const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
+  const x = event.deltaX * scale
+  const y = event.deltaY * scale
+  if (event.shiftKey || treatDeltaYAsPan) return Math.abs(x) >= Math.abs(y) ? x : y
+  return x
+}
+
 export function addCalendarMonths(iso: string, months: number) {
   const d = new Date(utc(iso))
   const day = d.getUTCDate()
@@ -80,6 +93,69 @@ export function addExtendBuffer(iso: string, zoom: Zoom, dir: 1 | -1) {
   if (spec.unit === 'weeks') return addDays(iso, dir * spec.cols * 7)
   if (spec.unit === 'months') return addCalendarMonths(iso, dir * spec.cols)
   return addCalendarMonths(iso, dir * spec.cols * 12)
+}
+
+function clampIso(iso: string, minIso: string, maxIso: string) {
+  if (utc(iso) < utc(minIso)) return minIso
+  if (utc(iso) > utc(maxIso)) return maxIso
+  return iso
+}
+
+/**
+ * One-drag travel box: buffer past the bar's current start (left) and end (right),
+ * not the timeline's old range edge (Jade Vasun / Smartsheet).
+ */
+export function dragTravelLimits(startIso: string, endIso: string, zoom: Zoom) {
+  return {
+    minStart: addExtendBuffer(startIso, zoom, -1),
+    maxEnd: addExtendBuffer(endIso, zoom, 1),
+  }
+}
+
+/**
+ * Clamp a proposed span to one zoom buffer past the snapshot bar.
+ * Move keeps duration. Resize clamps the moving edge only. Day-segment
+ * clamps the destination date into the same box.
+ */
+export function clampDragSpan(
+  snapshot: { start: string; end: string },
+  next: { start: string; end: string },
+  zoom: Zoom,
+  kind: 'move' | 'resize' | 'day' = 'resize',
+): { start: string; end: string; atStartLimit: boolean; atEndLimit: boolean } {
+  const { minStart, maxEnd } = dragTravelLimits(snapshot.start, snapshot.end, zoom)
+  const snapDur = utc(snapshot.end) - utc(snapshot.start)
+  let start = next.start
+  let end = next.end
+  if (kind === 'move') {
+    if (utc(end) > utc(maxEnd)) {
+      end = maxEnd
+      start = isoFromTs(utc(end) - snapDur)
+    }
+    if (utc(start) < utc(minStart)) {
+      start = minStart
+      end = isoFromTs(utc(start) + snapDur)
+    }
+  } else {
+    start = clampIso(start, minStart, kind === 'day' ? maxEnd : snapshot.end)
+    end = clampIso(end, kind === 'day' ? minStart : snapshot.start, maxEnd)
+    if (utc(start) > utc(end)) {
+      if (utc(next.start) !== utc(snapshot.start)) start = end
+      else end = start
+    }
+  }
+  return {
+    start,
+    end,
+    atStartLimit: utc(start) <= utc(minStart),
+    atEndLimit: utc(end) >= utc(maxEnd),
+  }
+}
+
+/** Clamp a pointer date used for day-segment edits to the same one-drag box. */
+export function clampDragIso(snapshot: { start: string; end: string }, iso: string, zoom: Zoom) {
+  const { minStart, maxEnd } = dragTravelLimits(snapshot.start, snapshot.end, zoom)
+  return clampIso(iso, minStart, maxEnd)
 }
 
 /**

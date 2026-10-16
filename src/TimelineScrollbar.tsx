@@ -6,10 +6,16 @@ function readMetrics(el: HTMLElement): Metrics {
   return { view: el.clientWidth, total: Math.max(el.clientWidth, el.scrollWidth), left: el.scrollLeft }
 }
 
-export function TimelineScrollbar({ scrollRef }: { scrollRef: RefObject<HTMLDivElement | null> }) {
+export function TimelineScrollbar({
+  scrollRef,
+  onScrollBy,
+}: {
+  scrollRef: RefObject<HTMLDivElement | null>
+  onScrollBy: (dx: number) => void
+}) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [metrics, setMetrics] = useState<Metrics>({ view: 1, total: 1, left: 0 })
-  const dragRef = useRef<{ originX: number; originLeft: number; maxThumb: number; maxScroll: number } | null>(null)
+  const dragRef = useRef<{ lastX: number } | null>(null)
 
   const sync = useCallback(() => {
     const el = scrollRef.current
@@ -27,6 +33,8 @@ export function TimelineScrollbar({ scrollRef }: { scrollRef: RefObject<HTMLDivE
     el.addEventListener('scroll', sync, { passive: true })
     const ro = new ResizeObserver(sync)
     ro.observe(el)
+    const child = el.firstElementChild
+    if (child) ro.observe(child)
     return () => {
       el.removeEventListener('scroll', sync)
       ro.disconnect()
@@ -39,13 +47,25 @@ export function TimelineScrollbar({ scrollRef }: { scrollRef: RefObject<HTMLDivE
   const maxScroll = Math.max(1, metrics.total - metrics.view)
   const thumbLeft = (metrics.left / maxScroll) * maxThumb
 
+  function panFromPointerDx(dx: number) {
+    const el = scrollRef.current
+    if (!el) return
+    const room = Math.max(0, el.scrollWidth - el.clientWidth)
+    const liveThumb = Math.max(32, (el.clientWidth / Math.max(el.clientWidth, el.scrollWidth)) * (trackRef.current?.clientWidth ?? trackW))
+    const liveMaxThumb = Math.max(1, (trackRef.current?.clientWidth ?? trackW) - liveThumb)
+    onScrollBy(room < 4 ? dx : (dx / liveMaxThumb) * room)
+    sync()
+  }
+
   function setScrollFromClientX(clientX: number) {
     const track = trackRef.current
     const el = scrollRef.current
     if (!track || !el) return
     const rect = track.getBoundingClientRect()
     const ratio = (clientX - rect.left - thumbW / 2) / Math.max(1, rect.width - thumbW)
-    el.scrollLeft = Math.max(0, Math.min(1, ratio)) * maxScroll
+    const room = Math.max(0, el.scrollWidth - el.clientWidth)
+    const target = Math.max(0, Math.min(1, ratio)) * Math.max(1, room)
+    onScrollBy(target - el.scrollLeft)
     sync()
   }
 
@@ -54,16 +74,15 @@ export function TimelineScrollbar({ scrollRef }: { scrollRef: RefObject<HTMLDivE
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
-    dragRef.current = { originX: event.clientX, originLeft: metrics.left, maxThumb, maxScroll }
+    dragRef.current = { lastX: event.clientX }
   }
 
   function onThumbMove(event: ReactPointerEvent<HTMLButtonElement>) {
     const origin = dragRef.current
-    const el = scrollRef.current
-    if (!origin || !el) return
-    const dx = event.clientX - origin.originX
-    el.scrollLeft = origin.originLeft + (dx / origin.maxThumb) * origin.maxScroll
-    sync()
+    if (!origin) return
+    const dx = event.clientX - origin.lastX
+    origin.lastX = event.clientX
+    panFromPointerDx(dx)
   }
 
   function onThumbUp() {

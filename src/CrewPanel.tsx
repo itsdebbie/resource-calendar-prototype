@@ -7,6 +7,7 @@ import type { CrewRow } from './crew'
 import { cellKey } from './crew'
 import type { Column } from './timeline'
 import { CloseIcon, ExpandLessIcon, ExpandMoreIcon, PersonQuestionIcon, WarningIcon } from './icons'
+import { wheelPanDelta } from './interaction'
 
 type Finder = { kind: IssueKind; index: number }
 
@@ -68,9 +69,8 @@ export function CrewPanel({
     if (!root) return
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
-      const dx = event.shiftKey && Math.abs(event.deltaY) > Math.abs(event.deltaX) ? event.deltaY : event.deltaX
+      const dx = wheelPanDelta(event)
       if (Math.abs(dx) < 2) return
-      if (!event.shiftKey && Math.abs(event.deltaY) >= Math.abs(dx)) return
       event.preventDefault()
       onScrollBy(dx)
     }
