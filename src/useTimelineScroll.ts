@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Zoom } from './data'
-import { padColumns, type ExtendEdge } from './interaction'
+import { padColumns, wheelPanDelta, type ExtendEdge } from './interaction'
 import {
   DAY_VIEW_DAYS,
   DEMO_TODAY,
@@ -275,17 +275,19 @@ export function useTimelineScroll(
   )
 
   const autoScrollFromPointer = useCallback(
-    (clientX: number) => {
+    (clientX: number, allow: { left?: boolean; right?: boolean } = {}) => {
       const el = scrollRef.current
       if (!el) return 0
+      const allowLeft = allow.left !== false
+      const allowRight = allow.right !== false
       const rect = el.getBoundingClientRect()
       const viewW = Math.min(el.clientWidth, window.innerWidth)
       const left = rect.left + gutterRef.current + EDGE_SCROLL_ZONE_PX
       const right = rect.left + viewW - EDGE_SCROLL_ZONE_PX
       let dx = 0
-      if (clientX > right) {
+      if (allowRight && clientX > right) {
         dx = Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (clientX - right) / EDGE_SCROLL_GAIN)
-      } else if (clientX < left) {
+      } else if (allowLeft && clientX < left) {
         dx = -Math.min(EDGE_SCROLL_MAX_PX, EDGE_SCROLL_MIN_PX + (left - clientX) / EDGE_SCROLL_GAIN)
       }
       if (dx) scrollBy(dx)
@@ -402,27 +404,31 @@ export function useTimelineScroll(
       else if (el.scrollLeft + viewW > el.scrollWidth - width * pad) growAtEdge('end')
     }
 
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [scrollRef, publishWindow, growAtEdge])
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return
-      const fromShift = event.shiftKey ? event.deltaY : 0
-      const dx = Math.abs(event.deltaX) >= Math.abs(fromShift) ? event.deltaX : fromShift
-      if (event.shiftKey && fromShift) event.preventDefault()
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const pane = el.parentElement
+      if (!pane?.contains(target)) return
+      const treatY = Boolean(target.closest('.rc-grid-head, .prod-head, .gantt-hscroll, .gantt-hscroll-thumb'))
+      const dx = wheelPanDelta(event, treatY)
       if (Math.abs(dx) < 2) return
-      const viewW = Math.min(el.clientWidth, window.innerWidth)
-      const noOverflow = el.scrollWidth <= viewW + 4
-      const atStart = el.scrollLeft <= 2
-      const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2
-      if (dx < 0 && (atStart || noOverflow)) growAtEdge('start')
-      else if (dx > 0 && (atEnd || noOverflow)) growAtEdge('end')
+      const noOverflow = el.scrollWidth <= el.clientWidth + 4
+      if (event.shiftKey || treatY || noOverflow) {
+        event.preventDefault()
+        scrollBy(dx)
+      }
     }
-
-    el.addEventListener('scroll', onScroll, { passive: true })
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => {
-      el.removeEventListener('scroll', onScroll)
-      el.removeEventListener('wheel', onWheel)
-    }
-  }, [scrollRef, publishWindow, growAtEdge])
+    window.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => window.removeEventListener('wheel', onWheel, { capture: true })
+  }, [scrollRef, scrollBy])
 
   return {
     columns,

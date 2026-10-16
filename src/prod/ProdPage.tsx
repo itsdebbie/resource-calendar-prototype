@@ -55,7 +55,7 @@ import { DateJumpPicker } from '../DateJumpPicker'
 import { TimelineScrollbar } from '../TimelineScrollbar'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
-import { extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from '../interaction'
+import { clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from '../interaction'
 import {
   CalendarIcon,
   ChevronRightIcon,
@@ -528,14 +528,25 @@ function ProdGrid({ view }: { view: ProdView }) {
         document.body.classList.add('prod-grabbing')
       }
       if (!drag.moved) return
-      const raw = dateAtClientXRef.current(clientX)
-      const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize-end' ? 'end' : 'point'
-      const date = snapDragIso(zoom, raw, snapEdge)
-      const origin = snapDragIso(zoom, drag.originDate, 'point')
-      let next = drag.snapshot
-      if (drag.mode === 'move') next = shift(drag.snapshot, diffDays(origin, date))
-      else if (drag.mode === 'resize-start') next = resizeStart(drag.snapshot, date)
-      else next = resizeEnd(drag.snapshot, date)
+      const place = () => {
+        const raw = dateAtClientXRef.current(clientX)
+        const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize-end' ? 'end' : 'point'
+        const date = snapDragIso(zoom, raw, snapEdge)
+        const origin = snapDragIso(zoom, drag.originDate, 'point')
+        let next = drag.snapshot
+        if (drag.mode === 'move') next = shift(drag.snapshot, diffDays(origin, date))
+        else if (drag.mode === 'resize-start') next = resizeStart(drag.snapshot, date)
+        else next = resizeEnd(drag.snapshot, date)
+        const clamped = clampDragSpan(drag.snapshot, next, zoom, drag.mode === 'move' ? 'move' : 'resize')
+        return { next: { ...next, start: clamped.start, end: clamped.end }, clamped }
+      }
+      let placed = place()
+      const scrolled = autoScrollRef.current(clientX, {
+        left: !placed.clamped.atStartLimit,
+        right: !placed.clamped.atEndLimit,
+      })
+      if (scrolled) placed = place()
+      const next = placed.next
       let nextRow = drag.originRow
       if (drag.mode === 'move') {
         const hit = rowAtPoint(clientY)
@@ -672,7 +683,6 @@ function ProdGrid({ view }: { view: ProdView }) {
     const tick = () => {
       const drag = dragRef.current
       if (drag) {
-        autoScrollRef.current(drag.lastX)
         applyDragRef.current(drag.lastX, drag.lastY)
       }
       raf = requestAnimationFrame(tick)
@@ -1052,7 +1062,7 @@ function ProdGrid({ view }: { view: ProdView }) {
               {rowSlice.padBottom > 0 ? <div className="prod-virt-pad" style={{ height: rowSlice.padBottom }} aria-hidden /> : null}
             </div>
           </div>
-          <TimelineScrollbar scrollRef={scrollRef} />
+          <TimelineScrollbar scrollRef={scrollRef} onScrollBy={timeline.scrollBy} />
           {selectedCount > 0 ? (
             <div className="prod-action">
               <span className="prod-action-count">

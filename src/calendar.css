@@ -129,6 +129,7 @@
 .rc-canvas {
   position: relative;
   min-width: 100%;
+  max-width: none !important;
 }
 
 .rc-grid-head,

@@ -107,7 +107,7 @@ import {
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
 import { TimelineScrollbar } from './TimelineScrollbar'
-import { extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
+import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
 import {
   columnWeekLoading,
@@ -502,41 +502,65 @@ export function ResourceCalendar() {
       if (!drag) return
       if (Math.abs(clientX - drag.originX) > 5) drag.moved = true
       if (!drag.moved) return
-      autoScrollFromPointer(clientX)
-      const raw = dateAtClientX(clientX)
-      const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize' ? 'end' : 'point'
-      const date = snapDragIso(zoom, raw, snapEdge)
-      const origin = snapDragIso(zoom, drag.originDate, 'point')
-      const delta = diffDays(origin, date)
-      if (Math.abs(delta) > 0 || date !== drag.fromDay) drag.moved = true
-      const next: Record<string, Span> = {}
-      if (drag.mode === 'day') {
-        const id = drag.ids[0]
-        const snap = id ? drag.snapshot[id] : undefined
-        if (id && snap) {
-          next[id] = moveOneDay(snap, drag.fromDay, date)
+      const place = (x: number) => {
+        const raw = dateAtClientX(x)
+        const snapEdge = drag.mode === 'resize-start' ? 'start' : drag.mode === 'resize' ? 'end' : 'point'
+        let date = snapDragIso(zoom, raw, snapEdge)
+        const origin = snapDragIso(zoom, drag.originDate, 'point')
+        const next: Record<string, Span> = {}
+        let atStartLimit = true
+        let atEndLimit = true
+        if (drag.mode === 'day') {
+          const id = drag.ids[0]
+          const snap = id ? drag.snapshot[id] : undefined
+          if (id && snap) {
+            date = clampDragIso(snap, date, zoom)
+            const span = moveOneDay(snap, drag.fromDay, date)
+            const clamped = clampDragSpan(snap, span, zoom, 'day')
+            next[id] = { ...span, start: clamped.start, end: clamped.end }
+            atStartLimit = clamped.atStartLimit
+            atEndLimit = clamped.atEndLimit
+          }
+        } else if (drag.mode === 'resize') {
+          const id = drag.ids[0]
+          const snap = id ? drag.snapshot[id] : undefined
+          if (id && snap) {
+            const clamped = clampDragSpan(snap, resizeSpanEnd(snap, date), zoom, 'resize')
+            next[id] = { ...snap, end: clamped.end }
+            atStartLimit = clamped.atStartLimit
+            atEndLimit = clamped.atEndLimit
+            date = clamped.end
+          }
+        } else if (drag.mode === 'resize-start') {
+          const id = drag.ids[0]
+          const snap = id ? drag.snapshot[id] : undefined
+          if (id && snap) {
+            const clamped = clampDragSpan(snap, resizeSpanStart(snap, date), zoom, 'resize')
+            next[id] = { ...snap, start: clamped.start }
+            atStartLimit = clamped.atStartLimit
+            atEndLimit = clamped.atEndLimit
+            date = clamped.start
+          }
+        } else {
+          const delta = diffDays(origin, date)
+          atStartLimit = true
+          atEndLimit = true
+          for (const id of drag.ids) {
+            const snap = drag.snapshot[id]
+            if (!snap) continue
+            const clamped = clampDragSpan(snap, shiftSpan(snap, delta), zoom, 'move')
+            next[id] = { ...snap, start: clamped.start, end: clamped.end }
+            if (!clamped.atStartLimit) atStartLimit = false
+            if (!clamped.atEndLimit) atEndLimit = false
+          }
         }
-      } else if (drag.mode === 'resize') {
-        const id = drag.ids[0]
-        const snap = id ? drag.snapshot[id] : undefined
-        if (id && snap) {
-          next[id] = resizeSpanEnd(snap, date)
-        }
-      } else if (drag.mode === 'resize-start') {
-        const id = drag.ids[0]
-        const snap = id ? drag.snapshot[id] : undefined
-        if (id && snap) {
-          next[id] = resizeSpanStart(snap, date)
-        }
-      } else {
-        for (const id of drag.ids) {
-          const snap = drag.snapshot[id]
-          if (!snap) continue
-          next[id] = shiftSpan(snap, delta)
-        }
+        return { next, date, atStartLimit, atEndLimit }
       }
-      if (Object.keys(next).length) setSpans((prev) => ({ ...prev, ...next }))
-      const preview = Object.values(next)
+      let placed = place(clientX)
+      const scrolled = autoScrollFromPointer(clientX, { left: !placed.atStartLimit, right: !placed.atEndLimit })
+      if (scrolled) placed = place(clientX)
+      if (Object.keys(placed.next).length) setSpans((prev) => ({ ...prev, ...placed.next }))
+      const preview = Object.values(placed.next)
       if (preview.length) {
         const start = preview.reduce((min, span) => (span.start < min ? span.start : min), preview[0]!.start)
         const end = preview.reduce((max, span) => (span.end > max ? span.end : max), preview[0]!.end)
@@ -547,7 +571,7 @@ export function ResourceCalendar() {
               ? formatDay(start)
               : drag.mode === 'resize'
                 ? formatDay(end)
-                : formatDay(date)
+                : formatDay(placed.date)
         dropStartRef.current = start
         dropEndRef.current = end
         setDragHint({
@@ -555,7 +579,7 @@ export function ResourceCalendar() {
           x: clientX,
           y: clientY ?? drag.lastY,
           label,
-          snapDay: drag.mode === 'resize' ? end : date,
+          snapDay: drag.mode === 'resize' ? end : placed.date,
         })
       }
     },
@@ -1052,7 +1076,7 @@ export function ResourceCalendar() {
             </GanttContext.Provider>
             </div>
           </div>
-          <TimelineScrollbar scrollRef={scrollRef} />
+          <TimelineScrollbar scrollRef={scrollRef} onScrollBy={timeline.scrollBy} />
           </div>
               {groupBy === 'projects' ? (
                 <CrewPanel

@@ -204,6 +204,7 @@
 .prod-canvas {
   position: relative;
   min-width: 100%;
+  max-width: none !important;
 }
 
 .prod-row,
