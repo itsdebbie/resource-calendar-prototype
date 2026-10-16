@@ -12,6 +12,8 @@ type CalendarShortcutHandlers = {
   panPrev: () => void
   panNext: () => void
   setZoom: (zoom: Zoom) => void
+  zoomIn: () => void
+  zoomOut: () => void
   cancelDrag: () => boolean
   interceptKey?: (event: KeyboardEvent) => boolean
 }
@@ -49,6 +51,8 @@ export function useCalendarShortcuts(handlers: CalendarShortcutHandlers) {
       if (action.type === 'today') current.goToday()
       else if (action.type === 'prev') current.panPrev()
       else if (action.type === 'next') current.panNext()
+      else if (action.type === 'zoomIn') current.zoomIn()
+      else if (action.type === 'zoomOut') current.zoomOut()
       else current.setZoom(action.zoom)
     }
     window.addEventListener('keydown', onKey, true)

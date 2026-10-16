@@ -108,8 +108,9 @@ import {
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
 import { PeriodNav } from './PeriodNav'
+import { ZoomNav } from './ZoomNav'
 import { TimelineScrollbar } from './TimelineScrollbar'
-import { isTextEntryTarget, tryFocusTimeline } from './shortcuts'
+import { tryFocusTimeline } from './shortcuts'
 import { useCalendarShortcuts } from './useCalendarShortcuts'
 import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
@@ -455,19 +456,6 @@ export function ResourceCalendar() {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [zoom, dateAtClientX, changeZoom])
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (isTextEntryTarget(event.target)) return
-      const plus = event.key === '=' || event.key === '+'
-      const minus = event.key === '-' || event.key === '_'
-      if (!plus && !minus) return
-      event.preventDefault()
-      changeZoom(zoomStep(zoom, plus ? -1 : 1), firstVisibleIso, 0)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
 
   useEffect(() => {
     if (selected.length === 0) return
@@ -941,6 +929,8 @@ export function ResourceCalendar() {
     panPrev: () => timeline.panByVisibleSpan(-1),
     panNext: () => timeline.panByVisibleSpan(1),
     setZoom: (next) => changeZoom(next),
+    zoomIn: () => changeZoom(zoomStep(zoom, -1)),
+    zoomOut: () => changeZoom(zoomStep(zoom, 1)),
     cancelDrag,
     interceptKey: (event) => {
       if (!finder) return false
@@ -986,22 +976,28 @@ export function ResourceCalendar() {
                 </SegmentedControl>
               </div>
               <div className="rc-toolbar-cluster">
-                <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
-                  <Tooltip.Trigger
-                    onPointerDown={() => setZoomTipOpen(false)}
-                    onClick={() => setZoomTipOpen(false)}
-                    onMouseLeave={() => setZoomTipOpen(undefined)}
-                  >
-                    <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-                      <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-                    </SegmentedControl>
-                  </Tooltip.Trigger>
-                  <Tooltip.Content>{zoomTip}</Tooltip.Content>
-                </Tooltip>
+                <ZoomNav
+                  zoom={zoom}
+                  onZoomIn={() => changeZoom(zoomStep(zoom, -1))}
+                  onZoomOut={() => changeZoom(zoomStep(zoom, 1))}
+                >
+                  <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
+                    <Tooltip.Trigger
+                      onPointerDown={() => setZoomTipOpen(false)}
+                      onClick={() => setZoomTipOpen(false)}
+                      onMouseLeave={() => setZoomTipOpen(undefined)}
+                    >
+                      <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+                        <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                      </SegmentedControl>
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{zoomTip}</Tooltip.Content>
+                  </Tooltip>
+                </ZoomNav>
               </div>
               <div className="rc-toolbar-cluster rc-toolbar-end">
                 <Switch

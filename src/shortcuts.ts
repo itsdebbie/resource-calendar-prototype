@@ -18,6 +18,8 @@ export type CalendarShortcut =
   | { type: 'prev' }
   | { type: 'next' }
   | { type: 'zoom'; zoom: Zoom }
+  | { type: 'zoomIn' }
+  | { type: 'zoomOut' }
   | { type: 'escape' }
 
 export function isTextEntryTarget(target: EventTarget | null) {
@@ -71,6 +73,8 @@ export function matchCalendarShortcut(
   if (event.key === 'Escape') return { type: 'escape' }
   if (event.key === 'ArrowLeft') return opts.timelineFocused ? { type: 'prev' } : null
   if (event.key === 'ArrowRight') return opts.timelineFocused ? { type: 'next' } : null
+  if (event.key === '-') return { type: 'zoomOut' }
+  if (event.key === '=' || event.key === '+') return { type: 'zoomIn' }
   if (event.key.length !== 1) return null
   const letter = event.key.toLowerCase()
   if (letter === 't') return { type: 'today' }

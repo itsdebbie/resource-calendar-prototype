@@ -1,6 +1,6 @@
 # Interaction logic (locked 15 Oct 2026)
 
-Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`, `src/shortcuts.ts`.
+Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`, `src/shortcuts.ts`, `src/ZoomNav.tsx`.
 
 There is **no prototype mode switch**. Two rules are always on:
 
@@ -62,9 +62,17 @@ Each click pans by **one visible span** of the current zoom (the columns on scre
 | **K** or **P** | Previous period (same as the ‹ arrow) |
 | **Left** / **Right** | Previous / next period **only when the timeline has focus** — not the left name pane or the bottom scrollbar |
 | **D** / **W** / **M** / **Q** / **Y** | Switch zoom to Day / Week / Month / Quarter / Year |
+| **-** | Zoom out one level (Day → Week → Month → Quarter → Year) |
+| **=** or **+** | Zoom in one level (Year → Quarter → Month → Week → Day) |
 | **Esc** | Cancel an in-progress drag or resize (the bar snaps back to its original dates) or close the date picker popover |
 
-**ASSUMPTION:** no shortcut fires while focus is in a text field, `<select>`, or `contenteditable`. Ctrl / ⌘ / Alt chords are left to the browser. Redesign `+` / `−` zoom is unchanged. Crew-finder Esc still closes the finder first.
+**ASSUMPTION:** no shortcut fires while focus is in a text field, `<select>`, or `contenteditable`. Ctrl / ⌘ / Alt chords are left to the browser (plain `-` / `=` / `+` only — browser zoom is untouched). Crew-finder Esc still closes the finder first.
+
+## Zoom in / out buttons
+
+**ASSUMPTION (Debbie Pan approved):** magnifying-glass **Zoom out** / **Zoom in** sit tight against the Day–Year switch so they read as one control (`- ZOOM +`, not period ‹ ›). Each click steps one level Day ↔ Week ↔ Month ↔ Quarter ↔ Year. Zoom-out is disabled at Year; zoom-in is disabled at Day. Accessible names are **Zoom out** / **Zoom in**.
+
+The buttons are backed by **Jade Vasun’s Slack screenshot** of `- ZOOM +` in a Gantt toolbar. Anvil 2 has no zoom glyphs, so the control uses magnifying-glass SVGs (`ZoomOutIcon` / `ZoomInIcon`) rather than minus/plus, which would look like prev/next. Icon treatment and the `-` / `=` / `+` keys are our call, not Jade’s.
 
 ## Drag / resize limit (not infinite)
 

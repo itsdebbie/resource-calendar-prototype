@@ -54,6 +54,7 @@ import {
 import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
 import { PeriodNav } from '../PeriodNav'
+import { ZoomNav } from '../ZoomNav'
 import { TimelineScrollbar } from '../TimelineScrollbar'
 import { tryFocusTimeline } from '../shortcuts'
 import { useCalendarShortcuts } from '../useCalendarShortcuts'
@@ -693,6 +694,8 @@ function ProdGrid({ view }: { view: ProdView }) {
     panPrev: () => timeline.panByVisibleSpan(-1),
     panNext: () => timeline.panByVisibleSpan(1),
     setZoom: (next) => changeZoom(next),
+    zoomIn: () => changeZoom(zoomStep(zoom, -1)),
+    zoomOut: () => changeZoom(zoomStep(zoom, 1)),
     cancelDrag,
   })
 
@@ -1019,13 +1022,19 @@ function ProdGrid({ view }: { view: ProdView }) {
               <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
             </SegmentedControl>
           ) : null}
-          <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-            <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-          </SegmentedControl>
+          <ZoomNav
+            zoom={zoom}
+            onZoomIn={() => changeZoom(zoomStep(zoom, -1))}
+            onZoomOut={() => changeZoom(zoomStep(zoom, 1))}
+          >
+            <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+              <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+            </SegmentedControl>
+          </ZoomNav>
           <div className="prod-toolbar-end">
             {!isSchedule ? (
               <Switch label="Show Weekends" checked={showWeekends} onChange={(_, state) => setShowWeekends(state.checked)} />
