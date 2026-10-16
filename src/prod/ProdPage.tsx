@@ -52,6 +52,7 @@ import {
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
+import { PeriodNav } from '../PeriodNav'
 import { TimelineScrollbar } from '../TimelineScrollbar'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
@@ -966,6 +967,10 @@ function ProdGrid({ view }: { view: ProdView }) {
           <Button size="small" appearance="secondary" onClick={() => pickDate(PROD_TODAY)}>
             Today
           </Button>
+          <PeriodNav
+            onPrev={() => timeline.panByVisibleSpan(-1)}
+            onNext={() => timeline.panByVisibleSpan(1)}
+          />
           <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
           {!isSchedule ? (
             <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>

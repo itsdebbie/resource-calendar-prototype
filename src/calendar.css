@@ -45,6 +45,13 @@
   min-width: 0;
 }
 
+.rc-period-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
 .rc-toolbar-cluster [data-anv='segmented-control'] {
   vertical-align: middle;
 }

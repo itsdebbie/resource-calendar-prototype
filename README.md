@@ -4,7 +4,7 @@ Interactive Anvil2 prototype of the signed-off Group by Projects resource calend
 
 Engineer-facing interaction rules (continuous pan, one-drag buffer, snap, edits per zoom, Day viewport, motion) are in **[docs/INTERACTION-LOGIC.md](docs/INTERACTION-LOGIC.md)**.
 
-- Horizontal timeline opens on today. **Continuous pan** never hits a wall (trackpad, Shift+wheel, always-visible scrollbar). **Drag / resize is not infinite:** in one gesture the bar can travel only the zoom buffer past its current start (left) or end (right). After drop, drag again for another buffer. Drag/move and resize work in **Day, Week, Month, Quarter, and Year**.
+- Horizontal timeline opens on today. **Continuous pan** never hits a wall (trackpad, Shift+wheel, always-visible scrollbar). Toolbar **‹ ›** after Today pan by one visible span (Day ~3 weeks; ASSUMPTION — Debbie approved the arrows, step size is our call). **Drag / resize is not infinite:** in one gesture the bar can travel only the zoom buffer past its current start (left) or end (right). After drop, drag again for another buffer. Drag/move and resize work in **Day, Week, Month, Quarter, and Year**.
 - Default **Day** zoom shows **~3 weeks** (21 day columns). Zoom Day → Week → Month → Quarter → Year from the segmented control, `+`/`-`, or pinch / ⌘ or Ctrl + scroll.
 - Projects view has sticky project rows, Budget / Sched. / Actual columns (blank unless booked or logged), and an optional crew panel (folded by default, remembered in `localStorage`). Trackpad, Shift+wheel, and drag on the crew strip pan the same timeline.
 - People view has sticky person rows. The crew panel is hidden.

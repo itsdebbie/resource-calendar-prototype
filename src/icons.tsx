@@ -37,6 +37,12 @@ export const ExpandLessIcon: Svg = (props) => (
   </svg>
 )
 
+export const ChevronLeftIcon: Svg = (props) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <path d="M14 18 15.41 16.59 10.83 12l4.58-4.59L14 6l-6 6z" />
+  </svg>
+)
+
 export const ChevronRightIcon: Svg = (props) => (
   <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
     <path d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />

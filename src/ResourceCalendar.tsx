@@ -106,6 +106,7 @@ import {
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
+import { PeriodNav } from './PeriodNav'
 import { TimelineScrollbar } from './TimelineScrollbar'
 import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
@@ -949,6 +950,10 @@ export function ResourceCalendar() {
                 >
                   Today
                 </Button>
+                <PeriodNav
+                  onPrev={() => timeline.panByVisibleSpan(-1)}
+                  onNext={() => timeline.panByVisibleSpan(1)}
+                />
                 <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
               </div>
               <div className="rc-toolbar-cluster">
