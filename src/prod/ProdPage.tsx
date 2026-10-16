@@ -39,6 +39,7 @@ import {
   isoFromTs,
   monthBands,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   sliceVisibleColumns,
@@ -52,7 +53,11 @@ import {
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
+import { PeriodNav } from '../PeriodNav'
+import { ZoomNav } from '../ZoomNav'
 import { TimelineScrollbar } from '../TimelineScrollbar'
+import { tryFocusTimeline } from '../shortcuts'
+import { useCalendarShortcuts } from '../useCalendarShortcuts'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
 import { clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from '../interaction'
@@ -358,9 +363,9 @@ function ProdGrid({ view }: { view: ProdView }) {
   const pickDate = useCallback(
     (iso: string) => {
       setPinnedIso(iso)
-      jumpTo(iso, 0)
+      jumpTo(pickerJumpIso(zoom, iso), 0)
     },
-    [jumpTo],
+    [jumpTo, zoom],
   )
   const fetchWeek = useCallback(
     (week: string) => fetchProdBarWeek(isSchedule ? initialScheduleBars : initialCalendarBars, week),
@@ -655,6 +660,45 @@ function ProdGrid({ view }: { view: ProdView }) {
     }, 0)
   }, [isSchedule, setBarsUser])
 
+  const cancelDrag = useCallback(() => {
+    const drag = dragRef.current
+    if (!drag) return false
+    dragRef.current = null
+    setBarsUser((prev) =>
+      prev.map((bar) =>
+        bar.id === drag.id
+          ? { ...bar, rowId: drag.originRow, start: drag.snapshot.start, end: drag.snapshot.end }
+          : bar,
+      ),
+    )
+    setSelected((prev) => {
+      const next = new Set<string>()
+      for (const key of prev) {
+        const parsed = parseCell(key)
+        if (!parsed || parsed.barId !== drag.id) next.add(key)
+      }
+      for (const key of dragCellsRef.current) next.add(key)
+      return next
+    })
+    setDragHint(null)
+    setDraggingId(null)
+    document.body.classList.remove('prod-grabbing')
+    hitEdgeRef.current = null
+    undoRef.current = null
+    ignoreClick.current = true
+    return true
+  }, [setBarsUser])
+
+  useCalendarShortcuts({
+    goToday: () => pickDate(PROD_TODAY),
+    panPrev: () => timeline.panByVisibleSpan(-1),
+    panNext: () => timeline.panByVisibleSpan(1),
+    setZoom: (next) => changeZoom(next),
+    zoomIn: () => changeZoom(zoomStep(zoom, -1)),
+    zoomOut: () => changeZoom(zoomStep(zoom, 1)),
+    cancelDrag,
+  })
+
   useEffect(() => {
     const onMove = (event: PointerEvent | MouseEvent) => {
       if (!dragRef.current) return
@@ -697,6 +741,7 @@ function ProdGrid({ view }: { view: ProdView }) {
     if (mode === 'move' && (event.shiftKey || event.ctrlKey || event.metaKey)) return
     event.preventDefault()
     event.stopPropagation()
+    tryFocusTimeline(event.currentTarget)
     undoRef.current = barsRef.current.map((b) => ({ ...b }))
     dragCellsRef.current = [...selected].filter((key) => parseCell(key)?.barId === bar.id)
     dragRef.current = {
@@ -966,6 +1011,10 @@ function ProdGrid({ view }: { view: ProdView }) {
           <Button size="small" appearance="secondary" onClick={() => pickDate(PROD_TODAY)}>
             Today
           </Button>
+          <PeriodNav
+            onPrev={() => timeline.panByVisibleSpan(-1)}
+            onNext={() => timeline.panByVisibleSpan(1)}
+          />
           <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
           {!isSchedule ? (
             <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>
@@ -973,13 +1022,19 @@ function ProdGrid({ view }: { view: ProdView }) {
               <SegmentedControl.Segment value="projects">Projects</SegmentedControl.Segment>
             </SegmentedControl>
           ) : null}
-          <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-            <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
-            <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-          </SegmentedControl>
+          <ZoomNav
+            zoom={zoom}
+            onZoomIn={() => changeZoom(zoomStep(zoom, -1))}
+            onZoomOut={() => changeZoom(zoomStep(zoom, 1))}
+          >
+            <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+              <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+              <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+            </SegmentedControl>
+          </ZoomNav>
           <div className="prod-toolbar-end">
             {!isSchedule ? (
               <Switch label="Show Weekends" checked={showWeekends} onChange={(_, state) => setShowWeekends(state.checked)} />
@@ -1004,7 +1059,13 @@ function ProdGrid({ view }: { view: ProdView }) {
 
       <div className="prod-body">
         <div className="prod-board">
-          <div className="prod-scroll" ref={scrollRef}>
+          <div
+            className="prod-scroll"
+            ref={scrollRef}
+            tabIndex={0}
+            aria-label="Timeline"
+            onPointerDown={(event) => tryFocusTimeline(event.target)}
+          >
             <div className="prod-canvas" style={{ width: canvasWidth }}>
               <HeadRow
                 isSchedule={isSchedule}

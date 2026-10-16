@@ -69,6 +69,7 @@ import {
   columnRenderBuffer,
   isoFromTs,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   activeSegments,
@@ -106,7 +107,11 @@ import {
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
+import { PeriodNav } from './PeriodNav'
+import { ZoomNav } from './ZoomNav'
 import { TimelineScrollbar } from './TimelineScrollbar'
+import { tryFocusTimeline } from './shortcuts'
+import { useCalendarShortcuts } from './useCalendarShortcuts'
 import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
 import {
@@ -151,13 +156,6 @@ type DragHint = {
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
 const ALL_OPEN = new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned'])
-
-function isTextEntryTarget(target: EventTarget | null) {
-  if (target instanceof HTMLTextAreaElement) return true
-  if (target instanceof HTMLElement && target.isContentEditable) return true
-  if (!(target instanceof HTMLInputElement)) return false
-  return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
-}
 
 function readCrewOpen() {
   try {
@@ -351,7 +349,7 @@ export function ResourceCalendar() {
 
   function pickDate(iso: string) {
     setPinnedIso(iso)
-    jumpTo(iso, 0)
+    jumpTo(pickerJumpIso(zoom, iso), 0)
   }
 
   const visColumns = useMemo(
@@ -458,31 +456,6 @@ export function ResourceCalendar() {
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [zoom, dateAtClientX, changeZoom])
-
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      const target = event.target
-      if (isTextEntryTarget(target)) return
-      if (finder) {
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-          event.preventDefault()
-          stepFinder(event.key === 'ArrowDown' ? 1 : -1)
-          return
-        }
-        if (event.key === 'Escape') {
-          setFinder(null)
-          return
-        }
-      }
-      const plus = event.key === '=' || event.key === '+'
-      const minus = event.key === '-' || event.key === '_'
-      if (!plus && !minus) return
-      event.preventDefault()
-      changeZoom(zoomStep(zoom, plus ? -1 : 1), firstVisibleIso, 0)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
 
   useEffect(() => {
     if (selected.length === 0) return
@@ -629,6 +602,22 @@ export function ResourceCalendar() {
       window.removeEventListener('pointerup', onUp)
     }
   }, [applyDrag])
+
+  const cancelDrag = useCallback(() => {
+    const drag = dragRef.current
+    if (!drag) return false
+    dragRef.current = null
+    setSpans((prev) => ({ ...prev, ...drag.snapshot }))
+    setDragIds(new Set())
+    setDragHint(null)
+    setHoursBefore(null)
+    document.body.classList.remove('rc-grabbing')
+    dropStartRef.current = null
+    dropEndRef.current = null
+    hitEdgeRef.current = null
+    ignoreClick.current = true
+    return true
+  }, [])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -787,6 +776,7 @@ export function ResourceCalendar() {
     if (!editable || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
+    tryFocusTimeline(event.currentTarget)
     setHoursBefore(snapshotCrewHours(crewRows))
     const originDate = dateAtClientX(event.clientX)
     const ids =
@@ -934,6 +924,30 @@ export function ResourceCalendar() {
     }
   }
 
+  useCalendarShortcuts({
+    goToday: () => pickDate(DEMO_TODAY),
+    panPrev: () => timeline.panByVisibleSpan(-1),
+    panNext: () => timeline.panByVisibleSpan(1),
+    setZoom: (next) => changeZoom(next),
+    zoomIn: () => changeZoom(zoomStep(zoom, -1)),
+    zoomOut: () => changeZoom(zoomStep(zoom, 1)),
+    cancelDrag,
+    interceptKey: (event) => {
+      if (!finder) return false
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        stepFinder(event.key === 'ArrowDown' ? 1 : -1)
+        return true
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setFinder(null)
+        return true
+      }
+      return false
+    },
+  })
+
   return (
     <Flex direction="column" gap="3" className={`rc-root ${groupBy === 'people' ? 'rc-is-people' : 'rc-is-projects'}`}>
       <Card padding="0" className="rc-card">
@@ -949,6 +963,10 @@ export function ResourceCalendar() {
                 >
                   Today
                 </Button>
+                <PeriodNav
+                  onPrev={() => timeline.panByVisibleSpan(-1)}
+                  onNext={() => timeline.panByVisibleSpan(1)}
+                />
                 <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
               </div>
               <div className="rc-toolbar-cluster">
@@ -958,22 +976,28 @@ export function ResourceCalendar() {
                 </SegmentedControl>
               </div>
               <div className="rc-toolbar-cluster">
-                <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
-                  <Tooltip.Trigger
-                    onPointerDown={() => setZoomTipOpen(false)}
-                    onClick={() => setZoomTipOpen(false)}
-                    onMouseLeave={() => setZoomTipOpen(undefined)}
-                  >
-                    <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
-                      <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
-                      <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
-                    </SegmentedControl>
-                  </Tooltip.Trigger>
-                  <Tooltip.Content>{zoomTip}</Tooltip.Content>
-                </Tooltip>
+                <ZoomNav
+                  zoom={zoom}
+                  onZoomIn={() => changeZoom(zoomStep(zoom, -1))}
+                  onZoomOut={() => changeZoom(zoomStep(zoom, 1))}
+                >
+                  <Tooltip openOnHover delay={600} placement="top" open={zoomTipOpen}>
+                    <Tooltip.Trigger
+                      onPointerDown={() => setZoomTipOpen(false)}
+                      onClick={() => setZoomTipOpen(false)}
+                      onMouseLeave={() => setZoomTipOpen(undefined)}
+                    >
+                      <SegmentedControl size="small" selected={zoom} onChange={(value) => changeZoom(value as Zoom)}>
+                        <SegmentedControl.Segment value="days">Day</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="weeks">Week</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="months">Month</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="quarters">Quarter</SegmentedControl.Segment>
+                        <SegmentedControl.Segment value="year">Year</SegmentedControl.Segment>
+                      </SegmentedControl>
+                    </Tooltip.Trigger>
+                    <Tooltip.Content>{zoomTip}</Tooltip.Content>
+                  </Tooltip>
+                </ZoomNav>
               </div>
               <div className="rc-toolbar-cluster rc-toolbar-end">
                 <Switch
@@ -1012,12 +1036,15 @@ export function ResourceCalendar() {
           <div
             className={`rc-scroll${dragIds.size ? ' is-dragging' : ''}`}
             ref={scrollRef}
+            tabIndex={0}
+            aria-label="Timeline"
             style={
               {
                 ['--rc-cols' as string]: String(columns.length),
                 ['--rc-col-w' as string]: `${colW}px`,
               } as CSSProperties
             }
+            onPointerDown={(event) => tryFocusTimeline(event.target)}
             onClick={(event) => {
               if (!(event.target instanceof Element)) return
               if (event.target.closest('.rc-bar, .rc-overlay, .rc-crew, .rc-chip-item')) return

@@ -1,6 +1,6 @@
 # Interaction logic (locked 15 Oct 2026)
 
-Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`.
+Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`, `src/shortcuts.ts`, `src/ZoomNav.tsx`.
 
 There is **no prototype mode switch**. Two rules are always on:
 
@@ -27,17 +27,52 @@ Day zoom targets **21 day columns** (~3 weeks) in the visible timeline, not 14.
 
 ## Date picker
 
-Fixed-width control (`PICKER_LABEL_SIZER`, currently `Sep 30 to Oct 20, 2026`). Label does not jump between zooms.
+The chip **label** is the full visible span (`visibleColumnRange` from `firstVisible` / `lastVisible`) and updates while scrolling. Same-year ranges keep the year once at the end. One visible unit shows that unit alone. Fixed width (`PICKER_LABEL_SIZER` = `Sep 30, 2026 to Oct 20, 2027`) so the control does not overflow or jump between zooms.
 
-| Zoom | Label | Range |
+| Zoom | Several units on screen | One unit |
 | --- | --- | --- |
-| Day | `Oct 15 to Nov 4, 2026` (short `to`, no weekday) | First through last **visible day column** (~**21 days**) |
-| Week | `Oct 12 to Nov 8, 2026` | First through last **visible week column** (not a hardcoded 14 days) |
-| Month | `Oct 2026` | Calendar month |
-| Quarter | `Q4 2026` | Calendar quarter |
-| Year | `2026` | Calendar year |
+| Day | `Oct 15 to Nov 4, 2026` | `Oct 15, 2026` |
+| Week | `Oct 12 to Nov 8, 2026` | `Oct 12 to 18, 2026` |
+| Month | `Oct 2026 to Jan 2027` (same year: `Oct to Dec 2026`) | `Oct 2026` |
+| Quarter | `Q4 2026 to Q2 2027` (same year: `Q1 to Q3 2026`) | `Q4 2026` |
+| Year | `2026 to 2028` | `2026` |
 
-The popover still snaps Day/Week to the first visible week unless a picked date is still in that week (`pickerAnchorStart`). The chip **label** follows the columns on screen (`visibleColumnRange` from `firstVisible` / `lastVisible`) and updates while scrolling.
+Debbie Pan approved this label format.
+
+**ASSUMPTION (popover unit, not Jade’s):** the popover picks in the current zoom’s own unit. Day/Week: day calendar (existing). Month: month grid. Quarter: list of quarters. Year: list of years.
+
+**ASSUMPTION (left-edge jump, not Jade’s):** a picked date/unit lands at the **left edge** of the view in every zoom (`pickerJumpIso` → `jumpTo(..., 0)`). Day/Week keep the existing first-visible-week snap for the calendar highlight (`pickerAnchorStart`): the popover stays on the picked day while that day is still in the first visible week.
+
+## Period arrows
+
+Toolbar order on every route (`#/`, `#/prod/schedule`, `#/prod/calendar`): **Today**, then **‹ ›**, then the date-range chip. Accessible names are **Previous period** / **Next period**.
+
+Each click pans by **one visible span** of the current zoom (the columns on screen: Day ~21 days / ~3 weeks, and the equivalent visible Week / Month / Quarter / Year columns). The pan uses Anvil 2 default motion (`--a2-duration-default` / 200ms, `ease-out`). Plain trackpad / Shift+wheel / scrollbar pan is unchanged; the arrows are a shortcut and keep working with infinite scroll in both directions.
+
+**ASSUMPTION:** One visible span per click. Debbie Pan approved the arrows; the step size is our call, not Jade Vasun’s.
+
+## Keyboard shortcuts (Google Calendar)
+
+**ASSUMPTION (nice-to-have — Debbie Pan copied these from Google Calendar; Jade Vasun did not ask):** the same keys work on `#/`, `#/prod/schedule`, and `#/prod/calendar`.
+
+| Key | Action |
+| --- | --- |
+| **T** | Jump to today |
+| **J** or **N** | Next period (same as the › arrow) |
+| **K** or **P** | Previous period (same as the ‹ arrow) |
+| **Left** / **Right** | Previous / next period **only when the timeline has focus** — not the left name pane or the bottom scrollbar |
+| **D** / **W** / **M** / **Q** / **Y** | Switch zoom to Day / Week / Month / Quarter / Year |
+| **-** | Zoom out one level (Day → Week → Month → Quarter → Year) |
+| **=** or **+** | Zoom in one level (Year → Quarter → Month → Week → Day) |
+| **Esc** | Cancel an in-progress drag or resize (the bar snaps back to its original dates) or close the date picker popover |
+
+**ASSUMPTION:** no shortcut fires while focus is in a text field, `<select>`, or `contenteditable`. Ctrl / ⌘ / Alt chords are left to the browser (plain `-` / `=` / `+` only — browser zoom is untouched). Crew-finder Esc still closes the finder first.
+
+## Zoom in / out buttons
+
+**ASSUMPTION (Debbie Pan approved):** magnifying-glass **Zoom out** / **Zoom in** sit tight against the Day–Year switch so they read as one control (`- ZOOM +`, not period ‹ ›). Each click steps one level Day ↔ Week ↔ Month ↔ Quarter ↔ Year. Zoom-out is disabled at Year; zoom-in is disabled at Day. Accessible names are **Zoom out** / **Zoom in**.
+
+The buttons are backed by **Jade Vasun’s Slack screenshot** of `- ZOOM +` in a Gantt toolbar. Anvil 2 has no zoom glyphs, so the control uses magnifying-glass SVGs (`ZoomOutIcon` / `ZoomInIcon`) rather than minus/plus, which would look like prev/next. Icon treatment and the `-` / `=` / `+` keys are our call, not Jade’s.
 
 ## Drag / resize limit (not infinite)
 

@@ -41,8 +41,8 @@ export const EDGE_SCROLL_GAIN = 3
 export const ZOOM_ORDER: Zoom[] = ['days', 'weeks', 'months', 'quarters', 'year']
 /** 0 = Sunday. Later this can follow a company first-day-of-week setting. */
 export const WEEK_START_DAY = 0
-/** Invisible sizer for the toolbar picker; longest 21-day range label. */
-export const PICKER_LABEL_SIZER = 'Sep 30 to Oct 20, 2026'
+/** Invisible sizer for the toolbar picker — longest cross-year day/week span label. */
+export const PICKER_LABEL_SIZER = 'Sep 30, 2026 to Oct 20, 2027'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export const MONTH_LABELS = MONTHS
@@ -121,23 +121,50 @@ export function weekendsVisible(zoom: Zoom, showWeekends: boolean) {
 }
 
 export function pickerLabel(zoom: Zoom, startIso: string, endIso?: string) {
-  const d = new Date(utc(startIso))
+  const start = new Date(utc(startIso))
+  const end = new Date(utc(endIso ?? startIso))
+  const sy = start.getUTCFullYear()
+  const ey = end.getUTCFullYear()
+  const sameYear = sy === ey
   if (zoom === 'days' || zoom === 'weeks') {
     const fallback = zoom === 'days' ? DAY_VIEW_DAYS : 14
-    const end = endIso ?? addDays(startIso, fallback - 1)
-    const a = new Date(utc(startIso))
-    const b = new Date(utc(end))
-    const year = b.getUTCFullYear()
-    const leftMonth = MONTHS[a.getUTCMonth()]
-    const rightMonth = MONTHS[b.getUTCMonth()]
-    if (a.getUTCMonth() === b.getUTCMonth() && a.getUTCFullYear() === year) {
-      return `${leftMonth} ${a.getUTCDate()} to ${b.getUTCDate()}, ${year}`
+    const resolvedEnd = new Date(utc(endIso ?? addDays(startIso, fallback - 1)))
+    const sm = MONTHS[start.getUTCMonth()]
+    const em = MONTHS[resolvedEnd.getUTCMonth()]
+    const sd = start.getUTCDate()
+    const ed = resolvedEnd.getUTCDate()
+    const endYear = resolvedEnd.getUTCFullYear()
+    if (start.getTime() === resolvedEnd.getTime()) return `${sm} ${sd}, ${sy}`
+    if (sy === endYear && start.getUTCMonth() === resolvedEnd.getUTCMonth()) {
+      return `${sm} ${sd} to ${ed}, ${sy}`
     }
-    return `${leftMonth} ${a.getUTCDate()} to ${rightMonth} ${b.getUTCDate()}, ${year}`
+    if (sy === endYear) return `${sm} ${sd} to ${em} ${ed}, ${sy}`
+    return `${sm} ${sd}, ${sy} to ${em} ${ed}, ${endYear}`
   }
-  if (zoom === 'months') return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
-  if (zoom === 'quarters') return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`
-  return String(d.getUTCFullYear())
+  if (zoom === 'months') {
+    const sm = MONTHS[start.getUTCMonth()]
+    const em = MONTHS[end.getUTCMonth()]
+    if (sameYear && start.getUTCMonth() === end.getUTCMonth()) return `${sm} ${sy}`
+    if (sameYear) return `${sm} to ${em} ${sy}`
+    return `${sm} ${sy} to ${em} ${ey}`
+  }
+  if (zoom === 'quarters') {
+    const sq = Math.floor(start.getUTCMonth() / 3) + 1
+    const eq = Math.floor(end.getUTCMonth() / 3) + 1
+    if (sameYear && sq === eq) return `Q${sq} ${sy}`
+    if (sameYear) return `Q${sq} to Q${eq} ${sy}`
+    return `Q${sq} ${sy} to Q${eq} ${ey}`
+  }
+  if (sy === ey) return String(sy)
+  return `${sy} to ${ey}`
+}
+
+/** Iso to align at the left edge after a picker choice. Day/Week keep the picked day. */
+export function pickerJumpIso(zoom: Zoom, iso: string) {
+  if (zoom === 'days' || zoom === 'weeks') return iso
+  if (zoom === 'months') return startOfMonth(iso)
+  if (zoom === 'quarters') return startOfQuarter(iso)
+  return startOfYear(iso)
 }
 
 export function calendarStartDay(): 'Sunday' | 'Monday' {

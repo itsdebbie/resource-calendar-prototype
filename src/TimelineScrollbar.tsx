@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { blurTimeline } from './shortcuts'
 
 type Metrics = { view: number; total: number; left: number }
 
@@ -73,6 +74,7 @@ export function TimelineScrollbar({
     if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
+    blurTimeline(scrollRef.current)
     event.currentTarget.setPointerCapture(event.pointerId)
     dragRef.current = { lastX: event.clientX }
   }
@@ -91,6 +93,7 @@ export function TimelineScrollbar({
 
   function onTrackDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
+    blurTimeline(scrollRef.current)
     if ((event.target as HTMLElement).closest('.gantt-hscroll-thumb')) return
     setScrollFromClientX(event.clientX)
   }
