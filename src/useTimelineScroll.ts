@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Zoom } from './data'
-import { padColumns, wheelPanDelta, type ExtendEdge } from './interaction'
+import { MOTION_DURATION_DEFAULT_MS, padColumns, wheelPanDelta, type ExtendEdge } from './interaction'
 import {
   DAY_VIEW_DAYS,
   DEMO_TODAY,
@@ -97,6 +97,11 @@ export function useTimelineScroll(
   const readyRef = useRef(false)
   const alignedAt = useRef(0)
   const slideRef = useRef(false)
+  const firstVisibleRef = useRef(firstVisible)
+  const lastVisibleRef = useRef(lastVisible)
+  const panAnimRef = useRef(0)
+  firstVisibleRef.current = firstVisible
+  lastVisibleRef.current = lastVisible
 
   function rebuildExtent(nextZoom: Zoom, iso: string) {
     return extentAround(nextZoom, iso, viewportPx, columnWidth(nextZoom, viewportPx), seedStartIso, seedEndIso)
@@ -251,10 +256,16 @@ export function useTimelineScroll(
     [growAtEdge, slideByCols],
   )
 
+  const cancelPanAnim = useCallback(() => {
+    if (panAnimRef.current) cancelAnimationFrame(panAnimRef.current)
+    panAnimRef.current = 0
+  }, [])
+
   const scrollBy = useCallback(
     (dx: number) => {
       const el = scrollRef.current
       if (!el) return
+      cancelPanAnim()
       fillAndGrow(el, dx)
       const before = el.scrollLeft
       el.scrollLeft += dx
@@ -271,8 +282,55 @@ export function useTimelineScroll(
       }
       publishWindow(el)
     },
-    [scrollRef, expandToIndex, publishWindow, slideByCols, fillAndGrow],
+    [scrollRef, expandToIndex, publishWindow, slideByCols, fillAndGrow, cancelPanAnim],
   )
+
+  const panByVisibleSpan = useCallback(
+    (dir: 1 | -1) => {
+      const el = scrollRef.current
+      if (!el) return
+      cancelPanAnim()
+      const span = Math.max(1, lastVisibleRef.current - firstVisibleRef.current + 1)
+      const targetIndex = firstVisibleRef.current + dir * span
+      fillAndGrow(el, dir * span * colWRef.current)
+      expandToIndex(targetIndex)
+      expandToIndex(targetIndex + span - 1)
+      const run = () => {
+        const dest = Math.max(0, (targetIndex - extentRef.current.min) * colWRef.current)
+        const start = el.scrollLeft
+        const dist = dest - start
+        const reduce =
+          typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+        if (reduce || Math.abs(dist) < 1) {
+          el.scrollLeft = dest
+          alignedAt.current = el.scrollLeft
+          publishWindow(el)
+          return
+        }
+        const t0 = performance.now()
+        const step = (now: number) => {
+          const t = Math.min(1, (now - t0) / MOTION_DURATION_DEFAULT_MS)
+          const eased = 1 - (1 - t) * (1 - t)
+          el.scrollLeft = start + dist * eased
+          alignedAt.current = el.scrollLeft
+          publishWindow(el)
+          if (t < 1) panAnimRef.current = requestAnimationFrame(step)
+          else {
+            panAnimRef.current = 0
+            const leftIdx = extentRef.current.min + Math.floor(el.scrollLeft / Math.max(1, colWRef.current))
+            const viewCols = Math.ceil(visiblePx(el, gutterRef.current) / Math.max(1, colWRef.current))
+            expandToIndex(leftIdx)
+            expandToIndex(leftIdx + viewCols)
+          }
+        }
+        panAnimRef.current = requestAnimationFrame(step)
+      }
+      requestAnimationFrame(() => requestAnimationFrame(run))
+    },
+    [scrollRef, cancelPanAnim, fillAndGrow, expandToIndex, publishWindow],
+  )
+
+  useLayoutEffect(() => () => cancelPanAnim(), [cancelPanAnim])
 
   const autoScrollFromPointer = useCallback(
     (clientX: number, allow: { left?: boolean; right?: boolean } = {}) => {
@@ -448,6 +506,7 @@ export function useTimelineScroll(
     ensureDate,
     includeRange,
     scrollBy,
+    panByVisibleSpan,
     autoScrollFromPointer,
     setAnchor,
   }

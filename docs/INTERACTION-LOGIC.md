@@ -39,6 +39,14 @@ Fixed-width control (`PICKER_LABEL_SIZER`, currently `Sep 30 to Oct 20, 2026`). 
 
 The popover still snaps Day/Week to the first visible week unless a picked date is still in that week (`pickerAnchorStart`). The chip **label** follows the columns on screen (`visibleColumnRange` from `firstVisible` / `lastVisible`) and updates while scrolling.
 
+## Period arrows
+
+Toolbar order on every route (`#/`, `#/prod/schedule`, `#/prod/calendar`): **Today**, then **‹ ›**, then the date-range chip. Accessible names are **Previous period** / **Next period**.
+
+Each click pans by **one visible span** of the current zoom (the columns on screen: Day ~21 days / ~3 weeks, and the equivalent visible Week / Month / Quarter / Year columns). The pan uses Anvil 2 default motion (`--a2-duration-default` / 200ms, `ease-out`). Plain trackpad / Shift+wheel / scrollbar pan is unchanged; the arrows are a shortcut and keep working with infinite scroll in both directions.
+
+**ASSUMPTION:** One visible span per click. Debbie Pan approved the arrows; the step size is our call, not Jade Vasun’s.
+
 ## Drag / resize limit (not infinite)
 
 Same magnitude **forward and backward**. During **one** drag or resize, the bar can travel only this far past **where that bar currently ends** (right) or **starts** (left) — Jade Vasun: Smartsheet gives the buffer “from wherever it ends,” not from the old timeline range edge.
