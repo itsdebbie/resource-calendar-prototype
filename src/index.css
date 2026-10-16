@@ -77,6 +77,11 @@ body,
   scrollbar-width: none;
 }
 
+.rc-scroll:focus,
+.prod-scroll:focus {
+  outline: none;
+}
+
 .rc-scroll::-webkit-scrollbar,
 .prod-scroll::-webkit-scrollbar {
   height: 0;

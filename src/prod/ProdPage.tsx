@@ -55,6 +55,8 @@ import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
 import { PeriodNav } from '../PeriodNav'
 import { TimelineScrollbar } from '../TimelineScrollbar'
+import { tryFocusTimeline } from '../shortcuts'
+import { useCalendarShortcuts } from '../useCalendarShortcuts'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
 import { clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from '../interaction'
@@ -657,6 +659,43 @@ function ProdGrid({ view }: { view: ProdView }) {
     }, 0)
   }, [isSchedule, setBarsUser])
 
+  const cancelDrag = useCallback(() => {
+    const drag = dragRef.current
+    if (!drag) return false
+    dragRef.current = null
+    setBarsUser((prev) =>
+      prev.map((bar) =>
+        bar.id === drag.id
+          ? { ...bar, rowId: drag.originRow, start: drag.snapshot.start, end: drag.snapshot.end }
+          : bar,
+      ),
+    )
+    setSelected((prev) => {
+      const next = new Set<string>()
+      for (const key of prev) {
+        const parsed = parseCell(key)
+        if (!parsed || parsed.barId !== drag.id) next.add(key)
+      }
+      for (const key of dragCellsRef.current) next.add(key)
+      return next
+    })
+    setDragHint(null)
+    setDraggingId(null)
+    document.body.classList.remove('prod-grabbing')
+    hitEdgeRef.current = null
+    undoRef.current = null
+    ignoreClick.current = true
+    return true
+  }, [setBarsUser])
+
+  useCalendarShortcuts({
+    goToday: () => pickDate(PROD_TODAY),
+    panPrev: () => timeline.panByVisibleSpan(-1),
+    panNext: () => timeline.panByVisibleSpan(1),
+    setZoom: (next) => changeZoom(next),
+    cancelDrag,
+  })
+
   useEffect(() => {
     const onMove = (event: PointerEvent | MouseEvent) => {
       if (!dragRef.current) return
@@ -699,6 +738,7 @@ function ProdGrid({ view }: { view: ProdView }) {
     if (mode === 'move' && (event.shiftKey || event.ctrlKey || event.metaKey)) return
     event.preventDefault()
     event.stopPropagation()
+    tryFocusTimeline(event.currentTarget)
     undoRef.current = barsRef.current.map((b) => ({ ...b }))
     dragCellsRef.current = [...selected].filter((key) => parseCell(key)?.barId === bar.id)
     dragRef.current = {
@@ -1010,7 +1050,13 @@ function ProdGrid({ view }: { view: ProdView }) {
 
       <div className="prod-body">
         <div className="prod-board">
-          <div className="prod-scroll" ref={scrollRef}>
+          <div
+            className="prod-scroll"
+            ref={scrollRef}
+            tabIndex={0}
+            aria-label="Timeline"
+            onPointerDown={(event) => tryFocusTimeline(event.target)}
+          >
             <div className="prod-canvas" style={{ width: canvasWidth }}>
               <HeadRow
                 isSchedule={isSchedule}

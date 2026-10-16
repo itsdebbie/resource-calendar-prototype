@@ -1,6 +1,6 @@
 # Interaction logic (locked 15 Oct 2026)
 
-Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`.
+Engineer-facing rules for `#/` (redesign), `#/prod/schedule`, and `#/prod/calendar`. Locked 15 Oct 2026 by Debbie Pan (with Jade Vasun on buffers). Code lives in `src/interaction.ts`, `src/useTimelineScroll.ts`, `src/timeline.ts`, `src/shortcuts.ts`.
 
 There is **no prototype mode switch**. Two rules are always on:
 
@@ -50,6 +50,21 @@ Toolbar order on every route (`#/`, `#/prod/schedule`, `#/prod/calendar`): **Tod
 Each click pans by **one visible span** of the current zoom (the columns on screen: Day ~21 days / ~3 weeks, and the equivalent visible Week / Month / Quarter / Year columns). The pan uses Anvil 2 default motion (`--a2-duration-default` / 200ms, `ease-out`). Plain trackpad / Shift+wheel / scrollbar pan is unchanged; the arrows are a shortcut and keep working with infinite scroll in both directions.
 
 **ASSUMPTION:** One visible span per click. Debbie Pan approved the arrows; the step size is our call, not Jade Vasun’s.
+
+## Keyboard shortcuts (Google Calendar)
+
+**ASSUMPTION (nice-to-have — Debbie Pan copied these from Google Calendar; Jade Vasun did not ask):** the same keys work on `#/`, `#/prod/schedule`, and `#/prod/calendar`.
+
+| Key | Action |
+| --- | --- |
+| **T** | Jump to today |
+| **J** or **N** | Next period (same as the › arrow) |
+| **K** or **P** | Previous period (same as the ‹ arrow) |
+| **Left** / **Right** | Previous / next period **only when the timeline has focus** — not the left name pane or the bottom scrollbar |
+| **D** / **W** / **M** / **Q** / **Y** | Switch zoom to Day / Week / Month / Quarter / Year |
+| **Esc** | Cancel an in-progress drag or resize (the bar snaps back to its original dates) or close the date picker popover |
+
+**ASSUMPTION:** no shortcut fires while focus is in a text field, `<select>`, or `contenteditable`. Ctrl / ⌘ / Alt chords are left to the browser. Redesign `+` / `−` zoom is unchanged. Crew-finder Esc still closes the finder first.
 
 ## Drag / resize limit (not infinite)
 

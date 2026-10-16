@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Calendar, Icon, Popover } from '@servicetitan/anvil2'
 import type { Zoom } from './data'
 import { CalendarIcon } from './icons'
+import { CLOSE_DATE_PICKER_EVENT } from './shortcuts'
 import {
   MONTH_LABELS,
   PICKER_LABEL_SIZER,
@@ -34,6 +35,13 @@ export function DateJumpPicker({
   onPick: (iso: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    function onClose() {
+      setOpen(false)
+    }
+    window.addEventListener(CLOSE_DATE_PICKER_EVENT, onClose)
+    return () => window.removeEventListener(CLOSE_DATE_PICKER_EVENT, onClose)
+  }, [])
   return (
     <Popover open={open} onClose={() => setOpen(false)} placement="bottom-start" disableCaret>
       <Popover.Trigger>

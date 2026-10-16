@@ -109,6 +109,8 @@ import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
 import { PeriodNav } from './PeriodNav'
 import { TimelineScrollbar } from './TimelineScrollbar'
+import { isTextEntryTarget, tryFocusTimeline } from './shortcuts'
+import { useCalendarShortcuts } from './useCalendarShortcuts'
 import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
 import {
@@ -153,13 +155,6 @@ type DragHint = {
 
 const DEFAULT_OPEN = new Set(['summit', 'apex', 'david', 'unassigned'])
 const ALL_OPEN = new Set(['summit', 'apex', 'monolith', 'leftover', 'david', 'danny', 'kevin', 'chris', 'unassigned'])
-
-function isTextEntryTarget(target: EventTarget | null) {
-  if (target instanceof HTMLTextAreaElement) return true
-  if (target instanceof HTMLElement && target.isContentEditable) return true
-  if (!(target instanceof HTMLInputElement)) return false
-  return target.type !== 'radio' && target.type !== 'checkbox' && target.type !== 'button' && target.type !== 'submit'
-}
 
 function readCrewOpen() {
   try {
@@ -463,19 +458,7 @@ export function ResourceCalendar() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      const target = event.target
-      if (isTextEntryTarget(target)) return
-      if (finder) {
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-          event.preventDefault()
-          stepFinder(event.key === 'ArrowDown' ? 1 : -1)
-          return
-        }
-        if (event.key === 'Escape') {
-          setFinder(null)
-          return
-        }
-      }
+      if (isTextEntryTarget(event.target)) return
       const plus = event.key === '=' || event.key === '+'
       const minus = event.key === '-' || event.key === '_'
       if (!plus && !minus) return
@@ -631,6 +614,22 @@ export function ResourceCalendar() {
       window.removeEventListener('pointerup', onUp)
     }
   }, [applyDrag])
+
+  const cancelDrag = useCallback(() => {
+    const drag = dragRef.current
+    if (!drag) return false
+    dragRef.current = null
+    setSpans((prev) => ({ ...prev, ...drag.snapshot }))
+    setDragIds(new Set())
+    setDragHint(null)
+    setHoursBefore(null)
+    document.body.classList.remove('rc-grabbing')
+    dropStartRef.current = null
+    dropEndRef.current = null
+    hitEdgeRef.current = null
+    ignoreClick.current = true
+    return true
+  }, [])
 
   useEffect(() => {
     if (dragIds.size === 0) return
@@ -789,6 +788,7 @@ export function ResourceCalendar() {
     if (!editable || event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
+    tryFocusTimeline(event.currentTarget)
     setHoursBefore(snapshotCrewHours(crewRows))
     const originDate = dateAtClientX(event.clientX)
     const ids =
@@ -936,6 +936,28 @@ export function ResourceCalendar() {
     }
   }
 
+  useCalendarShortcuts({
+    goToday: () => pickDate(DEMO_TODAY),
+    panPrev: () => timeline.panByVisibleSpan(-1),
+    panNext: () => timeline.panByVisibleSpan(1),
+    setZoom: (next) => changeZoom(next),
+    cancelDrag,
+    interceptKey: (event) => {
+      if (!finder) return false
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        stepFinder(event.key === 'ArrowDown' ? 1 : -1)
+        return true
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setFinder(null)
+        return true
+      }
+      return false
+    },
+  })
+
   return (
     <Flex direction="column" gap="3" className={`rc-root ${groupBy === 'people' ? 'rc-is-people' : 'rc-is-projects'}`}>
       <Card padding="0" className="rc-card">
@@ -1018,12 +1040,15 @@ export function ResourceCalendar() {
           <div
             className={`rc-scroll${dragIds.size ? ' is-dragging' : ''}`}
             ref={scrollRef}
+            tabIndex={0}
+            aria-label="Timeline"
             style={
               {
                 ['--rc-cols' as string]: String(columns.length),
                 ['--rc-col-w' as string]: `${colW}px`,
               } as CSSProperties
             }
+            onPointerDown={(event) => tryFocusTimeline(event.target)}
             onClick={(event) => {
               if (!(event.target instanceof Element)) return
               if (event.target.closest('.rc-bar, .rc-overlay, .rc-crew, .rc-chip-item')) return
