@@ -39,6 +39,7 @@ import {
   isoFromTs,
   monthBands,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   sliceVisibleColumns,
@@ -52,6 +53,7 @@ import {
 } from '../timeline'
 import { useTimelineScroll } from '../useTimelineScroll'
 import { DateJumpPicker } from '../DateJumpPicker'
+import { PeriodNav } from '../PeriodNav'
 import { TimelineScrollbar } from '../TimelineScrollbar'
 import { useWeekChunks } from '../useWeekChunks'
 import { columnWeekLoading, fetchProdBarWeek, overlapsWeek, visibleRowWindow } from '../weekChunks'
@@ -358,9 +360,9 @@ function ProdGrid({ view }: { view: ProdView }) {
   const pickDate = useCallback(
     (iso: string) => {
       setPinnedIso(iso)
-      jumpTo(iso, 0)
+      jumpTo(pickerJumpIso(zoom, iso), 0)
     },
-    [jumpTo],
+    [jumpTo, zoom],
   )
   const fetchWeek = useCallback(
     (week: string) => fetchProdBarWeek(isSchedule ? initialScheduleBars : initialCalendarBars, week),
@@ -966,6 +968,10 @@ function ProdGrid({ view }: { view: ProdView }) {
           <Button size="small" appearance="secondary" onClick={() => pickDate(PROD_TODAY)}>
             Today
           </Button>
+          <PeriodNav
+            onPrev={() => timeline.panByVisibleSpan(-1)}
+            onNext={() => timeline.panByVisibleSpan(1)}
+          />
           <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
           {!isSchedule ? (
             <SegmentedControl size="small" selected={groupBy} onChange={(value) => setGroupBy(value as GroupBy)}>

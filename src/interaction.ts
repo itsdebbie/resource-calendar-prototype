@@ -59,6 +59,8 @@ export type ExtendEdge = 'start' | 'end'
  */
 export const MOTION_DURATION_DEFAULT = 'var(--a2-duration-default, 200ms)'
 export const MOTION_DURATION_FAST = 'var(--a2-duration-fast, 100ms)'
+/** Milliseconds for `--a2-duration-default` (200ms). Used to animate period-arrow pans. */
+export const MOTION_DURATION_DEFAULT_MS = 200
 /**
  * ASSUMPTION: Anvil 2 has no easing tokens in the product guidance we were
  * given, so snaps and settles use CSS `ease-out`.

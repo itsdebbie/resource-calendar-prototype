@@ -45,6 +45,13 @@
   min-width: 0;
 }
 
+.rc-period-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
 .rc-toolbar-cluster [data-anv='segmented-control'] {
   vertical-align: middle;
 }
@@ -473,6 +480,7 @@
   gap: 8px;
   height: 32px;
   padding: 0 10px;
+  flex: none;
   border: 1px solid var(--a2-border-color-default, #c4c4c4);
   border-radius: 8px;
   background: var(--a2-background-color-default, #fff);
@@ -486,6 +494,7 @@
 .rc-date-label-wrap {
   position: relative;
   display: inline-block;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
 
@@ -551,13 +560,19 @@
   gap: 4px;
 }
 
-.rc-period-grid.is-months,
-.rc-period-grid.is-years {
+.rc-period-grid.is-months {
   grid-template-columns: repeat(3, 1fr);
 }
 
-.rc-period-grid.is-quarters {
-  grid-template-columns: repeat(2, 1fr);
+.rc-period-grid.is-quarters,
+.rc-period-grid.is-years {
+  grid-template-columns: 1fr;
+}
+
+.rc-period-grid.is-quarters button,
+.rc-period-grid.is-years button {
+  text-align: left;
+  padding: 8px 12px;
 }
 
 .rc-period-grid button {

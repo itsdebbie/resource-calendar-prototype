@@ -69,6 +69,7 @@ import {
   columnRenderBuffer,
   isoFromTs,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   activeSegments,
@@ -106,6 +107,7 @@ import {
 } from './timeline'
 import { useTimelineScroll } from './useTimelineScroll'
 import { DateJumpPicker } from './DateJumpPicker'
+import { PeriodNav } from './PeriodNav'
 import { TimelineScrollbar } from './TimelineScrollbar'
 import { clampDragIso, clampDragSpan, extendBoundsAfterDrop, initialExtendBounds, snapDragIso, type ExtendEdge } from './interaction'
 import { useWeekChunks } from './useWeekChunks'
@@ -351,7 +353,7 @@ export function ResourceCalendar() {
 
   function pickDate(iso: string) {
     setPinnedIso(iso)
-    jumpTo(iso, 0)
+    jumpTo(pickerJumpIso(zoom, iso), 0)
   }
 
   const visColumns = useMemo(
@@ -949,6 +951,10 @@ export function ResourceCalendar() {
                 >
                   Today
                 </Button>
+                <PeriodNav
+                  onPrev={() => timeline.panByVisibleSpan(-1)}
+                  onNext={() => timeline.panByVisibleSpan(1)}
+                />
                 <DateJumpPicker zoom={zoom} value={pickerStart} label={pickerText} onPick={pickDate} />
               </div>
               <div className="rc-toolbar-cluster">

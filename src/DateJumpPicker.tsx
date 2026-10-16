@@ -158,15 +158,16 @@ function QuarterPicker({ value, onPick }: { value: string; onPick: (iso: string)
           ›
         </button>
       </div>
-      <div className="rc-period-grid is-quarters">
+      <div className="rc-period-grid is-quarters" role="list">
         {[0, 1, 2, 3].map((q) => (
           <button
             key={q}
             type="button"
+            role="listitem"
             className={year === selected.getUTCFullYear() && q === selectedQ ? 'is-on' : undefined}
             onClick={() => onPick(startOfQuarter(isoFromParts(year, q * 3, 1)))}
           >
-            Q{q + 1}
+            Q{q + 1} {year}
           </button>
         ))}
       </div>
@@ -176,30 +177,31 @@ function QuarterPicker({ value, onPick }: { value: string; onPick: (iso: string)
 
 function YearPicker({ value, onPick }: { value: string; onPick: (iso: string) => void }) {
   const selectedYear = new Date(utc(value)).getUTCFullYear()
-  const [origin, setOrigin] = useState(Math.floor(selectedYear / 12) * 12)
+  const [origin, setOrigin] = useState(Math.floor(selectedYear / 10) * 10)
   useEffect(() => {
     const y = new Date(utc(value)).getUTCFullYear()
-    setOrigin(Math.floor(y / 12) * 12)
+    setOrigin(Math.floor(y / 10) * 10)
   }, [value])
-  const years = Array.from({ length: 12 }, (_, i) => origin + i)
+  const years = Array.from({ length: 10 }, (_, i) => origin + i)
   return (
     <div className="rc-period-pop">
       <div className="rc-period-head">
-        <button type="button" onClick={() => setOrigin((y) => y - 12)} aria-label="Previous years">
+        <button type="button" onClick={() => setOrigin((y) => y - 10)} aria-label="Previous years">
           ‹
         </button>
         <span>
           {years[0]}–{years[years.length - 1]}
         </span>
-        <button type="button" onClick={() => setOrigin((y) => y + 12)} aria-label="Next years">
+        <button type="button" onClick={() => setOrigin((y) => y + 10)} aria-label="Next years">
           ›
         </button>
       </div>
-      <div className="rc-period-grid is-years">
+      <div className="rc-period-grid is-years" role="list">
         {years.map((year) => (
           <button
             key={year}
             type="button"
+            role="listitem"
             className={year === selectedYear ? 'is-on' : undefined}
             onClick={() => onPick(startOfYear(isoFromParts(year, 0, 1)))}
           >
