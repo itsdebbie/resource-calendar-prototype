@@ -39,6 +39,7 @@ import {
   isoFromTs,
   monthBands,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   sliceVisibleColumns,
@@ -359,9 +360,9 @@ function ProdGrid({ view }: { view: ProdView }) {
   const pickDate = useCallback(
     (iso: string) => {
       setPinnedIso(iso)
-      jumpTo(iso, 0)
+      jumpTo(pickerJumpIso(zoom, iso), 0)
     },
-    [jumpTo],
+    [jumpTo, zoom],
   )
   const fetchWeek = useCallback(
     (week: string) => fetchProdBarWeek(isSchedule ? initialScheduleBars : initialCalendarBars, week),

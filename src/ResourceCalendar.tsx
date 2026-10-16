@@ -69,6 +69,7 @@ import {
   columnRenderBuffer,
   isoFromTs,
   pickerAnchorStart,
+  pickerJumpIso,
   pickerLabel,
   visibleColumnRange,
   activeSegments,
@@ -352,7 +353,7 @@ export function ResourceCalendar() {
 
   function pickDate(iso: string) {
     setPinnedIso(iso)
-    jumpTo(iso, 0)
+    jumpTo(pickerJumpIso(zoom, iso), 0)
   }
 
   const visColumns = useMemo(
